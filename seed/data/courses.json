@@ -1,0 +1,200 @@
+[
+  {
+    "courseId": "3a9f3d6c-c391-4b1c-9c3d-6c3f3d6c3f3d",
+    "teacherId": "user_7kFh92JkCpQw3N8M5L4xRzVtYs",
+    "teacherName": "John Doe",
+    "title": "Introduction to Programming",
+    "description": "Learn the basics of programming with this comprehensive course.",
+    "category": "Computer Science",
+    "image": "https://images.pexels.com/photos/5905888/pexels-photo-5905888.jpeg",
+    "price": 4999,
+    "level": "Beginner",
+    "status": "Published",
+    "enrollments": [
+      { "userId": "user_2ntu96pUCljUV2T9W0AThzjacQB" },
+      { "userId": "user_9xWp45MnKjL8vRt2Hs6BqDcEy" }
+    ],
+    "sections": [
+      {
+        "sectionId": "2f9d1e8b-5a3c-4b7f-9e6d-8c2a1f0b3d5e",
+        "sectionTitle": "Getting Started",
+        "sectionDescription": "Learn the basics of programming and set up your development environment.",
+        "chapters": [
+          {
+            "chapterId": "a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6",
+            "type": "Video",
+            "title": "Welcome to Programming",
+            "content": "https://example.com/videos/welcome.mp4",
+            "video": "https://example.com/videos/welcome.mp4",
+            "comments": [
+              {
+                "commentId": "1a2b3c4d-5e6f-7g8h-9i0j-1k2l3m4n5o6p",
+                "userId": "emma.wilson@hotmail.com",
+                "text": "Great introduction!",
+                "timestamp": "2023-03-10T09:15:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "courseId": "f1g2h3i4-j5k6-l7m8-n9o0-p1q2r3s4t5u6",
+    "teacherId": "user_4mNj68RtPvXw2Ky9Qc7HbSdAf",
+    "teacherName": "Emma Rodriguez",
+    "title": "Data Science and Big Data Analytics",
+    "description": "Master data science techniques and big data processing using Python and Apache Spark.",
+    "category": "Data Science",
+    "image": "https://images.pexels.com/photos/7688374/pexels-photo-7688374.jpeg",
+    "price": 7999,
+    "level": "Intermediate",
+    "status": "Published",
+    "enrollments": [
+      { "userId": "user_5vBn23WsLkMp7Jh4Gt8FxYcRz" }
+    ],
+    "sections": [
+      {
+        "sectionId": "g2h3i4j5-k6l7-m8n9-o0p1-q2r3s4t5u6v7",
+        "sectionTitle": "Introduction to Data Science",
+        "sectionDescription": "Learn the fundamental concepts of data science and analytics.",
+        "chapters": [
+          {
+            "chapterId": "h3i4j5k6-l7m8-n9o0-p1q2-r3s4t5u6v7w8",
+            "type": "Video",
+            "title": "Data Science Landscape",
+            "content": "https://example.com/videos/data-science-intro.mp4",
+            "comments": []
+          },
+          {
+            "chapterId": "i4j5k6l7-m8n9-o0p1-q2r3-s4t5-u6v7w8x9",
+            "type": "Text",
+            "title": "Statistical Foundations",
+            "content": "Understanding statistical methods and their applications in data science...",
+            "comments": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "courseId": "g2h3i4j5-k6l7-m8n9-o0p1-q2r3s4t5u6v7",
+    "teacherId": "user_7kFh92JkCpQw3N8M5L4xRzVtYs",
+    "teacherName": "Michael Chen",
+    "title": "Cybersecurity Fundamentals",
+    "description": "Learn essential cybersecurity principles, network security, and ethical hacking techniques.",
+    "category": "Cybersecurity",
+    "image": "https://images.pexels.com/photos/6804579/pexels-photo-6804579.jpeg",
+    "price": 8999,
+    "level": "Intermediate",
+    "status": "Published",
+    "enrollments": [],
+    "sections": [
+      {
+        "sectionId": "h3i4j5k6-l7m8-n9o0-p1q2-r3s4t5u6v7w8",
+        "sectionTitle": "Network Security Basics",
+        "sectionDescription": "Understand network vulnerabilities and protection strategies.",
+        "chapters": [
+          {
+            "chapterId": "j5k6l7m8-n9o0-p1q2-r3s4-t5u6v7w8x9y0",
+            "type": "Video",
+            "title": "Introduction to Network Security",
+            "content": "https://example.com/videos/network-security-intro.mp4",
+            "comments": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "courseId": "h3i4j5k6-l7m8-n9o0-p1q2-r3s4t5u6v7w8",
+    "teacherId": "user_4mNj68RtPvXw2Ky9Qc7HbSdAf",
+    "teacherName": "Sarah Thompson",
+    "title": "Digital Marketing and Social Media Strategy",
+    "description": "Learn comprehensive digital marketing techniques, social media management, and content creation.",
+    "category": "Marketing",
+    "image": "https://images.pexels.com/photos/7688612/pexels-photo-7688612.jpeg",
+    "price": 5999,
+    "level": "Beginner",
+    "status": "Published",
+    "enrollments": [
+      { "userId": "user_2ntu96pUCljUV2T9W0AThzjacQB" }
+    ],
+    "sections": [
+      {
+        "sectionId": "i4j5k6l7-m8n9-o0p1-q2r3-s4t5-u6v7w8x9",
+        "sectionTitle": "Social Media Fundamentals",
+        "sectionDescription": "Master social media platforms and content strategies.",
+        "chapters": [
+          {
+            "chapterId": "k6l7m8n9-o0p1-q2r3-s4t5-u6v7w8x9y0z1",
+            "type": "Video",
+            "title": "Social Media Platform Overview",
+            "content": "https://example.com/videos/social-media-platforms.mp4",
+            "comments": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "courseId": "i4j5k6l7-m8n9-o0p1-q2r3-s4t5u6v7w8x9",
+    "teacherId": "user_7kFh92JkCpQw3N8M5L4xRzVtYs",
+    "teacherName": "David Kim",
+    "title": "Cloud Computing with AWS and Azure",
+    "description": "Comprehensive course on cloud infrastructure, deployment, and management using AWS and Azure.",
+    "category": "Cloud Computing",
+    "image": "https://images.pexels.com/photos/7688375/pexels-photo-7688375.jpeg",
+    "price": 10999,
+    "level": "Advanced",
+    "status": "Published",
+    "enrollments": [],
+    "sections": [
+      {
+        "sectionId": "j5k6l7m8-n9o0-p1q2-r3s4-t5u6v7w8x9y0",
+        "sectionTitle": "Cloud Infrastructure Basics",
+        "sectionDescription": "Understanding cloud computing principles and service models.",
+        "chapters": [
+          {
+            "chapterId": "l7m8n9o0-p1q2-r3s4-t5u6-v7w8x9y0z1a2",
+            "type": "Video",
+            "title": "Introduction to Cloud Computing",
+            "content": "https://example.com/videos/cloud-computing-intro.mp4",
+            "comments": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "courseId": "j5k6l7m8-n9o0-p1q2-r3s4-t5u6v7w8x9y0",
+    "teacherId": "user_4mNj68RtPvXw2Ky9Qc7HbSdAf",
+    "teacherName": "Rachel Green",
+    "title": "UX/UI Design for Web and Mobile",
+    "description": "Learn modern UX/UI design principles, user research, wireframing, and prototyping techniques.",
+    "category": "Design",
+    "image": "https://images.pexels.com/photos/7688611/pexels-photo-7688611.jpeg",
+    "price": 6999,
+    "level": "Intermediate",
+    "status": "Published",
+    "enrollments": [
+      { "userId": "user_5vBn23WsLkMp7Jh4Gt8FxYcRz" }
+    ],
+    "sections": [
+      {
+        "sectionId": "k6l7m8n9-o0p1-q2r3-s4t5-u6v7w8x9y0z1",
+        "sectionTitle": "UX Research and Design Thinking",
+        "sectionDescription": "Understanding user needs and designing intuitive interfaces.",
+        "chapters": [
+          {
+            "chapterId": "m8n9o0p1-q2r3-s4t5-u6v7-w8x9y0z1a2b3",
+            "type": "Video",
+            "title": "Design Thinking Process",
+            "content": "https://example.com/videos/design-thinking.mp4",
+            "comments": []
+          }
+        ]
+      }
+    ]
+  }
+]

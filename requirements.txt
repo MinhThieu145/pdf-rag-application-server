@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+boto3
+aiofiles
+python-multipart
+pydantic
+python-dotenv
+llama-parse
+llama-index-core
+llama-index-llms-openai
+llama-index-embeddings-openai
+nest-asyncio

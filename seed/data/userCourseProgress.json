@@ -1,0 +1,21 @@
+[
+  {
+    "userId": "user_2ntu96pUCljUV2T9W0AThzjacQB",
+    "courseId": "3a9f3d6c-c391-4b1c-9c3d-6c3f3d6c3f3d",
+    "enrollmentDate": "2023-03-10T09:00:00Z",
+    "overallProgress": 33.33,
+    "progress": 33.33,
+    "sections": [
+      {
+        "sectionId": "2f9d1e8b-5a3c-4b7f-9e6d-8c2a1f0b3d5e",
+        "chapters": [
+          {
+            "chapterId": "a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6",
+            "completed": true
+          }
+        ]
+      }
+    ],
+    "lastAccessedTimestamp": "2023-03-15T14:30:00Z"
+  }
+]

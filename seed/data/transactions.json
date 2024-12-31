@@ -1,0 +1,18 @@
+[
+  {
+    "userId": "user_2ntu96pUCljUV2T9W0AThzjacQB",
+    "transactionId": "txn_1234567890",
+    "dateTime": "2023-03-10T09:00:00Z",
+    "courseId": "3a9f3d6c-c391-4b1c-9c3d-6c3f3d6c3f3d",
+    "paymentProvider": "stripe",
+    "amount": 4999
+  },
+  {
+    "userId": "user_9xWp45MnKjL8vRt2Hs6BqDcEy",
+    "transactionId": "txn_0987654321",
+    "dateTime": "2023-03-11T10:30:00Z",
+    "courseId": "3a9f3d6c-c391-4b1c-9c3d-6c3f3d6c3f3d",
+    "paymentProvider": "stripe",
+    "amount": 4999
+  }
+]
