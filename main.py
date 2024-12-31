@@ -5,7 +5,7 @@ from controllers.text_splitting_controller import router as text_split_router
 from controllers.text_embedding_controller import router as text_embed_router
 from controllers.text_processing_controller import router as text_process_router
 from schemas.course_schema import CourseCreate, CourseUpdate, VideoUploadRequest
-from config.db_config import create_tables
+# from config.db_config import create_tables
 
 # Initialize FastAPI app
 app = FastAPI()
