@@ -127,38 +127,68 @@ async def chat(request: ChatRequest):
     Chat endpoint that uses selected PDF context for responses
     """
     try:
+        logger.info(f"Processing chat request for PDF: {request.pdf_name}")
+        
+        if not request.pdf_name:
+            raise HTTPException(status_code=400, detail="PDF name is required")
+            
         # Create embedding for the user's question
         query_embedding = create_embedding(request.message)
         
-        # Search Pinecone with PDF filter if specified
-        search_filter = {"pdf_name": request.pdf_name} if request.pdf_name else None
+        # Search Pinecone with PDF filter
+        search_filter = {"pdf_name": request.pdf_name}
+        logger.info(f"Searching vectors with filter: {search_filter}")
+        
         relevant_chunks = await search_vectors(
             query_vector=query_embedding,
             filter=search_filter,
             top_k=5
         )
         
+        # Log the number of chunks found
+        logger.info(f"Found {len(relevant_chunks)} relevant chunks")
+        
         # Format context from relevant chunks
         context = "\n\n".join([chunk.metadata["text"] for chunk in relevant_chunks])
+        logger.info(f"Context being used:\n{context}")
         
+        if not relevant_chunks:
+            logger.warning(f"No relevant chunks found for PDF: {request.pdf_name}")
+            return JSONResponse(
+                content={
+                    "response": "I couldn't find any relevant content in the selected PDF to answer your question. Please try rephrasing your question or selecting a different PDF.",
+                    "context_used": False,
+                    "context": ""
+                },
+                status_code=200
+            )
+            
         # Get thread ID for user
         thread_id = user_threads.get(request.user_id)
         if not thread_id:
-            return JSONResponse(
-                content={"error": "Thread not found"}, 
-                status_code=404
+            raise HTTPException(
+                status_code=404,
+                detail="Thread not found. Please refresh the page."
             )
 
         # Add user message with context
+        message_content = f"""Based on the PDF document, answer the following question. If the answer cannot be found in the provided context, say so clearly.
+
+Context from the PDF:
+{context}
+
+Question: {request.message}
+
+Remember to:
+1. Only use information from the provided context
+2. If the answer isn't in the context, say so
+3. Be clear and concise
+4. Start your response with 'Based on the provided context...'"""
+
         client.beta.threads.messages.create(
             thread_id=thread_id,
             role="user",
-            content=f"""Use the following context to answer my question. If the answer cannot be found in the context, say so.
-            
-            Context:
-            {context}
-            
-            Question: {request.message}"""
+            content=message_content
         )
 
         # Run the assistant
@@ -168,16 +198,28 @@ async def chat(request: ChatRequest):
         )
 
         # Wait for the run to complete
-        while True:
+        max_retries = 30  # 30 seconds timeout
+        retry_count = 0
+        while retry_count < max_retries:
             run_status = client.beta.threads.runs.retrieve(
                 thread_id=thread_id,
                 run_id=run.id
             )
             if run_status.status == 'completed':
                 break
-            elif run_status.status == 'failed':
-                raise Exception("Assistant run failed")
+            elif run_status.status in ['failed', 'cancelled', 'expired']:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Assistant run {run_status.status}"
+                )
+            retry_count += 1
             time.sleep(1)
+            
+        if retry_count >= max_retries:
+            raise HTTPException(
+                status_code=500,
+                detail="Response timeout. Please try again."
+            )
 
         # Get the latest message
         messages = client.beta.threads.messages.list(thread_id=thread_id)
@@ -186,7 +228,8 @@ async def chat(request: ChatRequest):
         return JSONResponse(
             content={
                 "response": latest_message.content[0].text.value,
-                "context_used": bool(relevant_chunks)
+                "context_used": bool(relevant_chunks),
+                "context": context  # Include the context in the response
             },
             status_code=200
         )
