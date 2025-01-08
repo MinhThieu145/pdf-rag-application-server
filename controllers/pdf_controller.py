@@ -433,38 +433,35 @@ async def get_screenshots(pdf_name: str):
             detail=f"Failed to get screenshots: {str(e)}"
         )
 
-@router.get("/content/{pdf_name}")
-async def get_content(pdf_name: str):
-    """Get the JSON content for a specific PDF"""
+@router.get("/content/{filename}")
+async def get_json_content(filename: str):
+    """Get the JSON content for a specific file"""
     try:
-        bucket_name = os.getenv('AWS_BUCKET_NAME')
-        base_name = Path(pdf_name).stem
+        # Construct the S3 key for the JSON file
+        base_name = Path(filename).stem
         json_key = f"documents/{base_name}/json/{base_name}.json"
         
+        # Get the object from S3
         try:
-            # Download JSON from S3
-            response = s3_client.get_object(Bucket=bucket_name, Key=json_key)
+            response = s3_client.get_object(
+                Bucket=os.getenv('AWS_BUCKET_NAME'),
+                Key=json_key
+            )
             json_content = json.loads(response['Body'].read().decode('utf-8'))
-            
             return JSONResponse(
                 status_code=200,
-                content={
-                    "message": "Content retrieved successfully",
-                    "content": json_content
-                }
+                content=json_content
             )
         except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Content not found for PDF: {pdf_name}"
-                )
-            raise
+            raise HTTPException(
+                status_code=404,
+                detail=f"JSON file not found: {json_key}"
+            )
             
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get content: {str(e)}"
+            detail=f"Failed to get JSON content: {str(e)}"
         )
 
 @router.get("/processed")

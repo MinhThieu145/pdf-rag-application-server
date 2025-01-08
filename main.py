@@ -5,6 +5,7 @@ from controllers.text_splitting_controller import router as text_split_router
 from controllers.text_embedding_controller import router as text_embed_router
 from controllers.text_processing_controller import router as text_process_router
 from controllers.essay_controller import router as essay_router
+from controllers.evidence_extraction_controller import router as evidence_router
 from schemas.course_schema import CourseCreate, CourseUpdate, VideoUploadRequest
 # from config.db_config import create_tables
 
@@ -23,8 +24,19 @@ app.add_middleware(
     allow_credentials=False,  # Set to False when using "*" for origins
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"]
+    expose_headers=["*"],
+    max_age=3600,
 )
+
+# Add custom middleware for handling large headers
+@app.middleware("http")
+async def add_custom_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Large-Allocation"] = "true"
+    return response
+
+# Configure server settings
+app.state.max_header_size = 32768  # 32KB for headers
 
 # Include routes
 # app.include_router(course_controller.router, prefix="/api/courses", tags=["Courses"])
@@ -35,3 +47,4 @@ app.include_router(text_split_router, prefix="/api/text-split", tags=["text-spli
 app.include_router(text_embed_router, prefix="/api/embed", tags=["embeddings"])
 app.include_router(text_process_router, prefix="/api/process", tags=["text-processing"])
 app.include_router(essay_router, prefix="/api/essay", tags=["Essay"])
+app.include_router(evidence_router, prefix="/api/evidence", tags=["Evidence Extraction"])
