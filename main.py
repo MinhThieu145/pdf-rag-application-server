@@ -4,6 +4,7 @@ from controllers import course_controller, pdf_controller, property_graph_contro
 from controllers.text_splitting_controller import router as text_split_router
 from controllers.text_embedding_controller import router as text_embed_router
 from controllers.text_processing_controller import router as text_process_router
+from controllers.essay_controller import router as essay_router
 from schemas.course_schema import CourseCreate, CourseUpdate, VideoUploadRequest
 # from config.db_config import create_tables
 
@@ -33,3 +34,4 @@ app.include_router(pdf_chatting_controller.router, prefix="/api/pdf-chat", tags=
 app.include_router(text_split_router, prefix="/api/text-split", tags=["text-split"])
 app.include_router(text_embed_router, prefix="/api/embed", tags=["embeddings"])
 app.include_router(text_process_router, prefix="/api/process", tags=["text-processing"])
+app.include_router(essay_router, prefix="/api/essay", tags=["Essay"])
