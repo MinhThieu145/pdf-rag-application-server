@@ -9,12 +9,9 @@ from dotenv import load_dotenv
 from io import BytesIO
 from pathlib import Path
 import tempfile
-from llama_parse import LlamaParse
-import nest_asyncio
-import httpx
-
-# Apply nest_asyncio to allow nested async loops
-nest_asyncio.apply()
+from unstructured.partition.pdf import partition_pdf
+import uuid
+import traceback
 
 # Load environment variables
 load_dotenv()
@@ -25,12 +22,6 @@ s3_client = boto3.client(
     aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
     aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
     region_name=os.getenv('AWS_REGION')
-)
-
-# Initialize parser
-parser = LlamaParse(
-    api_key=os.getenv("LLAMA_CLOUD_API_KEY"),
-    verbose=True
 )
 
 # Settings
@@ -99,8 +90,10 @@ async def upload_file(file: UploadFile = File(...)):
         # Read file into memory
         content = await file.read()
         base_name = Path(file.filename).stem
-        pdf_key = f"documents/{base_name}/{file.filename}"
+        pdf_key = f"evidence/{base_name}/{file.filename}"  
 
+        print(f"Uploading file to S3: {pdf_key}")
+        
         # Check if file already exists
         if check_file_exists_in_s3(pdf_key):
             raise HTTPException(
@@ -116,6 +109,7 @@ async def upload_file(file: UploadFile = File(...)):
         )
         
         pdf_url = f"https://{os.getenv('AWS_BUCKET_NAME')}.s3.{os.getenv('AWS_REGION')}.amazonaws.com/{pdf_key}"
+        print(f"File uploaded successfully to: {pdf_key}")
         return JSONResponse(
             status_code=200,
             content={
@@ -135,17 +129,46 @@ async def upload_file(file: UploadFile = File(...)):
 
 @router.post("/parse/{filename}")
 async def parse_pdf(filename: str):
-    """Parse a PDF file that's already in S3 and generate markdown"""
+    """Parse a PDF file that's already in S3 and generate text content"""
     temp_pdf_path = None
     try:
-        print(f"Starting to parse PDF: {filename}")
+        print(f"=== Starting PDF parsing for file: {filename} ===")
+        print(f"Input filename: {filename}")
+        
         # Get file info
         clean_filename = filename.split('/')[-1]
         base_name = Path(clean_filename).stem
-        s3_key = f"documents/{base_name}/{clean_filename}"
+        
+        # Use the same path structure as the upload function
+        s3_key = f"evidence/{base_name}/{clean_filename}"
         bucket_name = os.getenv('AWS_BUCKET_NAME')
         
+        print(f"Bucket name: {bucket_name}")
         print(f"Looking for file in S3: {s3_key}")
+        
+        # Check if file exists
+        try:
+            s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+            print(f"File exists in S3: {s3_key}")
+        except Exception as e:
+            # List all objects in bucket for debugging
+            print("File not found. Listing all objects in bucket for debugging:")
+            try:
+                response = s3_client.list_objects_v2(Bucket=bucket_name)
+                if 'Contents' in response:
+                    print("Files in bucket:")
+                    for obj in response['Contents']:
+                        print(f"- {obj['Key']}")
+                else:
+                    print("No files found in bucket")
+            except Exception as list_error:
+                print(f"Error listing bucket contents: {str(list_error)}")
+            
+            raise HTTPException(
+                status_code=404,
+                detail=f"File not found in S3: {s3_key}"
+            )
+        
         # Download from S3
         pdf_buffer = BytesIO()
         try:
@@ -154,9 +177,17 @@ async def parse_pdf(filename: str):
             print(f"Successfully downloaded file, size: {len(pdf_buffer.getvalue())} bytes")
         except ClientError as e:
             print(f"S3 download error: {str(e)}")
+            print(f"Error details:", traceback.format_exc())
             raise HTTPException(
                 status_code=404,
                 detail=f"File not found in S3: {s3_key}"
+            )
+        except Exception as e:
+            print(f"Unexpected download error: {str(e)}")
+            print(f"Error details:", traceback.format_exc())
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to download file: {str(e)}"
             )
         
         # Parse PDF
@@ -168,21 +199,49 @@ async def parse_pdf(filename: str):
             with open(temp_pdf_path, 'wb') as f:
                 f.write(pdf_buffer.getvalue())
             
-            print("Initializing parser...")
-            # Re-initialize parser for each request to ensure clean state
-            parser = LlamaParse(
-                api_key=os.getenv("LLAMA_CLOUD_API_KEY"),
-                verbose=True,
-                take_screenshot=True,
-                exact_charts=True  
-            )
-            
             print("Starting PDF parsing...")
             try:
-                json_result = parser.get_json_result(temp_pdf_path)
+                print(f"Parsing file: {temp_pdf_path}")
+                print(f"File size: {os.path.getsize(temp_pdf_path)} bytes")
+                print(f"File exists: {os.path.exists(temp_pdf_path)}")
+                
+                # Parse PDF using unstructured
+                elements = partition_pdf(temp_pdf_path)
+                text_content = "\n".join([str(element) for element in elements])
+                
+                # Create a simplified JSON structure
+                json_result = [{
+                    "job_id": str(uuid.uuid4()),
+                    "pages": [{
+                        "page": 1,
+                        "text": text_content,
+                        "md": text_content,
+                        "images": [],
+                        "charts": [],
+                        "items": [],
+                        "status": "completed",
+                        "links": [],
+                        "width": 0,
+                        "height": 0,
+                        "triggeredAutoMode": False,
+                        "structuredData": None,
+                        "noStructuredContent": False,
+                        "noTextContent": False if text_content else True
+                    }],
+                    "job_metadata": {
+                        "credits_used": 0,
+                        "job_credits_usage": 0,
+                        "job_pages": 1,
+                        "job_auto_mode_triggered_pages": 0,
+                        "job_is_cache_hit": False,
+                        "credits_max": 0
+                    }
+                }]
+                
                 print("Successfully parsed PDF")
                 job_id = json_result[0]["job_id"]
                 print(f"Got job ID: {job_id}")
+                
             except Exception as parse_error:
                 print(f"Parser error: {str(parse_error)}")
                 print(f"Parser error type: {type(parse_error)}")
@@ -202,16 +261,12 @@ async def parse_pdf(filename: str):
         # Upload result to S3
         print("Preparing to upload JSON result...")
         json_filename = f"{base_name}.json"
-        json_key = f"documents/{base_name}/json/{json_filename}"
+        json_key = f"evidence/{base_name}/json/{json_filename}"
         try:
             json_str = json.dumps(json_result, ensure_ascii=False, indent=2)
             json_buffer = BytesIO(json_str.encode('utf-8'))
             
-            s3_client.upload_fileobj(
-                json_buffer,
-                bucket_name,
-                json_key
-            )
+            s3_client.upload_fileobj(json_buffer, bucket_name, json_key)
             print(f"Successfully uploaded JSON to {json_key}")
         except Exception as upload_error:
             print(f"Error uploading JSON: {str(upload_error)}")
@@ -220,13 +275,11 @@ async def parse_pdf(filename: str):
                 detail=f"Failed to upload parsing results: {str(upload_error)}"
             )
         
-        json_url = f"https://{bucket_name}.s3.{os.getenv('AWS_REGION')}.amazonaws.com/{json_key}"
-        print("Returning successful response")
         return JSONResponse(
             status_code=200,
             content={
                 "message": "PDF parsed successfully",
-                "json_url": json_url,
+                "result": json_result[0],
                 "job_id": job_id
             }
         )
@@ -237,6 +290,7 @@ async def parse_pdf(filename: str):
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         print(f"Error type: {type(e)}")
+        print(f"Error details:", traceback.format_exc())
         raise HTTPException(
             status_code=500,
             detail=f"Failed to parse PDF: {str(e)}"
@@ -435,30 +489,46 @@ async def get_screenshots(pdf_name: str):
 
 @router.get("/content/{filename}")
 async def get_json_content(filename: str):
-    """Get the JSON content for a specific file"""
+    """Get the JSON content for a parsed PDF"""
     try:
-        # Construct the S3 key for the JSON file
-        base_name = Path(filename).stem
-        json_key = f"documents/{base_name}/json/{base_name}.json"
+        print(f"Getting JSON content for {filename}")
+        clean_filename = filename.split('/')[-1]
+        base_name = Path(clean_filename).stem
+        json_filename = f"{base_name}.json"
+        json_key = f"evidence/{base_name}/json/{json_filename}"
+        bucket_name = os.getenv('AWS_BUCKET_NAME')
         
-        # Get the object from S3
+        print(f"Looking for JSON in S3: {json_key}")
         try:
             response = s3_client.get_object(
-                Bucket=os.getenv('AWS_BUCKET_NAME'),
+                Bucket=bucket_name,
                 Key=json_key
             )
             json_content = json.loads(response['Body'].read().decode('utf-8'))
-            return JSONResponse(
-                status_code=200,
-                content=json_content
-            )
+            print(f"Successfully retrieved JSON content")
+            return json_content
         except ClientError as e:
+            print(f"Error getting JSON from S3: {str(e)}")
+            print(f"Error details:", traceback.format_exc())
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"JSON content not found for {filename}"
+                )
             raise HTTPException(
-                status_code=404,
-                detail=f"JSON file not found: {json_key}"
+                status_code=500,
+                detail=f"Failed to get JSON content: {str(e)}"
             )
-            
+        except Exception as e:
+            print(f"Unexpected error getting JSON: {str(e)}")
+            print(f"Error details:", traceback.format_exc())
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to get JSON content: {str(e)}"
+            )
     except Exception as e:
+        print(f"Error in get_json_content: {str(e)}")
+        print(f"Error details:", traceback.format_exc())
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get JSON content: {str(e)}"
@@ -525,6 +595,39 @@ async def get_processed_pdfs():
         raise HTTPException(
             status_code=500,
             detail=error_msg
+        )
+
+@router.get("/debug-list")
+async def debug_list_files():
+    """Debug endpoint to list all files in S3"""
+    try:
+        bucket_name = os.getenv('AWS_BUCKET_NAME')
+        print(f"Listing all files in bucket: {bucket_name}")
+        
+        response = s3_client.list_objects_v2(Bucket=bucket_name)
+        files = []
+        
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                print(f"Found file: {obj['Key']}")
+                files.append({
+                    'key': obj['Key'],
+                    'size': obj['Size'],
+                    'last_modified': obj['LastModified'].isoformat()
+                })
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": f"Found {len(files)} files",
+                "files": files
+            }
+        )
+    except Exception as e:
+        print(f"Error listing files: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list files: {str(e)}"
         )
 
 @router.delete("/delete/{full_path:path}")

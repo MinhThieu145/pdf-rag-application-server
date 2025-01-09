@@ -1,29 +1,33 @@
 from fastapi import APIRouter, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 import os
-import json
-import boto3
-from botocore.exceptions import ClientError
-from dotenv import load_dotenv
-from io import BytesIO
 from pathlib import Path
-import tempfile
+from io import BytesIO
+from botocore.exceptions import ClientError
 import logging
+from typing import Optional, List, Dict, Any
+import boto3
 from openai import OpenAI
-from pydantic import BaseModel, Field, ValidationError
-from typing import List, Optional, Dict, Any
+import json
 import re
 from datetime import datetime
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from pydantic import BaseModel, ValidationError
+import s3fs
+from llama_index.core import SimpleDirectoryReader
+from llama_parse import LlamaParse
+import shutil
+from dotenv import load_dotenv
+import nest_asyncio
+nest_asyncio.apply()
 
 # Load environment variables
 load_dotenv()
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+# Initialize router
+router = APIRouter()
 
 # Initialize AWS S3 client
 s3_client = boto3.client(
@@ -38,24 +42,33 @@ openai_client = OpenAI(
     api_key=os.getenv('OPENAI_API_KEY')
 )
 
-router = APIRouter()
+router = APIRouter(
+    tags=["evidence"]
+)
 
-def check_file_exists_in_s3(s3_key: str) -> bool:
+def check_file_exists_in_s3(key: str) -> bool:
     """Check if a file exists in S3"""
     try:
-        s3_client.head_object(
-            Bucket=os.getenv('AWS_BUCKET_NAME'),
-            Key=s3_key
-        )
+        bucket_name = os.getenv('AWS_BUCKET_NAME')
+        s3_client.head_object(Bucket=bucket_name, Key=key)
         return True
-    except ClientError:
-        return False
+    except ClientError as e:
+        if e.response['Error']['Code'] == '404':
+            return False
+        raise
 
 @router.post("/upload")
 async def upload_file_for_evidence(file: UploadFile = File(...)):
     """Upload a PDF file and process it for evidence extraction"""
     try:
         logger.info(f"Starting upload for file: {file.filename}")
+        
+        # Validate file type
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(
+                status_code=400,
+                detail="Only PDF files are allowed"
+            )
         
         # Read file into memory
         try:
@@ -68,8 +81,18 @@ async def upload_file_for_evidence(file: UploadFile = File(...)):
                 detail=f"Error reading file content: {str(e)}"
             )
 
+        # Get bucket name
+        bucket_name = os.getenv('AWS_BUCKET_NAME')
+        if not bucket_name:
+            logger.error("AWS_BUCKET_NAME environment variable not set")
+            raise HTTPException(
+                status_code=500,
+                detail="AWS configuration error: bucket name not set"
+            )
+
+        # Generate S3 key - store in folder with same name as file
         base_name = Path(file.filename).stem
-        pdf_key = f"evidence/{base_name}/{file.filename}"
+        pdf_key = f"documents/{base_name}/original_document/{file.filename}"
         logger.info(f"Generated S3 key: {pdf_key}")
 
         # Check if file already exists
@@ -91,124 +114,215 @@ async def upload_file_for_evidence(file: UploadFile = File(...)):
         try:
             s3_client.upload_fileobj(
                 BytesIO(content),
-                os.getenv('AWS_BUCKET_NAME'),
-                pdf_key
+                bucket_name,
+                pdf_key,
+                ExtraArgs={
+                    'ContentType': 'application/pdf'
+                }
             )
             logger.info(f"Successfully uploaded file to S3: {pdf_key}")
-        except Exception as e:
-            logger.error(f"Error uploading to S3: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error uploading to S3: {str(e)}"
-            )
-        
-        # Create response in the expected JsonData format
-        try:
-            evidence_data = {
-                "pages": [
-                    {
-                        "page": 1,
-                        "text": "Sample evidence 1 from document",
-                        "md": "",
-                        "images": [],
-                        "charts": [],
-                        "items": [
-                            {
-                                "type": "text",
-                                "value": "Sample evidence 1 from document",
-                                "md": "",
-                                "bBox": {
-                                    "x": 0,
-                                    "y": 0,
-                                    "w": 0,
-                                    "h": 0
-                                }
-                            }
-                        ],
-                        "status": "completed",
-                        "links": [],
-                        "width": 0,
-                        "height": 0,
-                        "triggeredAutoMode": False,
-                        "structuredData": None,
-                        "noStructuredContent": False,
-                        "noTextContent": False
-                    },
-                    {
-                        "page": 2,
-                        "text": "Sample evidence 2 from document",
-                        "md": "",
-                        "images": [],
-                        "charts": [],
-                        "items": [
-                            {
-                                "type": "text",
-                                "value": "Sample evidence 2 from document",
-                                "md": "",
-                                "bBox": {
-                                    "x": 0,
-                                    "y": 0,
-                                    "w": 0,
-                                    "h": 0
-                                }
-                            }
-                        ],
-                        "status": "completed",
-                        "links": [],
-                        "width": 0,
-                        "height": 0,
-                        "triggeredAutoMode": False,
-                        "structuredData": None,
-                        "noStructuredContent": False,
-                        "noTextContent": False
-                    }
-                ],
-                "job_metadata": {
-                    "credits_used": 0,
-                    "job_credits_usage": 0,
-                    "job_pages": 2,
-                    "job_auto_mode_triggered_pages": 0,
-                    "job_is_cache_hit": False,
-                    "credits_max": 0
+
+            # Generate a pre-signed URL for the uploaded file
+            url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': bucket_name,
+                    'Key': pdf_key
                 },
-                "job_id": f"job_{base_name}",
-                "file_path": pdf_key
-            }
-
-            bucket_name = os.getenv('AWS_BUCKET_NAME')
-            region = os.getenv('AWS_REGION')
-            if not bucket_name or not region:
-                raise ValueError("AWS_BUCKET_NAME or AWS_REGION environment variables not set")
-
-            pdf_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{pdf_key}"
-            logger.info(f"Generated PDF URL: {pdf_url}")
+                ExpiresIn=3600  # URL expires in 1 hour
+            )
 
             return JSONResponse(
                 status_code=200,
                 content={
                     "message": "File uploaded successfully",
-                    "url": pdf_url,
-                    "evidence": evidence_data
+                    "file": {
+                        "name": file.filename,
+                        "size": len(content),
+                        "url": url
+                    }
                 }
             )
+
         except Exception as e:
-            logger.error(f"Error preparing response: {str(e)}")
+            logger.error(f"Error uploading file: {str(e)}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Error preparing response: {str(e)}"
+                detail=f"Error uploading file: {str(e)}"
             )
 
-    except HTTPException as e:
-        # Re-raise HTTP exceptions
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Unexpected error in upload_file_for_evidence: {str(e)}", exc_info=True)
+        logger.error(f"Unexpected error uploading file: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Unexpected error: {str(e)}"
+            detail=f"Failed to upload file: {str(e)}"
         )
 
-@router.get("/{filename}")
+@router.get("/list")
+async def list_files_endpoint():
+    """List all files endpoint"""
+    try:
+        # Get list of files from S3 bucket
+        response = s3_client.list_objects_v2(
+            Bucket=os.getenv('AWS_BUCKET_NAME'),
+            Prefix='documents/'
+        )
+        
+        # Track unique base directories
+        base_dirs = set()
+        
+        # Extract file names from response
+        if 'Contents' in response:
+            for item in response['Contents']:
+                # Skip the directory itself
+                if item['Key'] == 'documents/':
+                    continue
+                    
+                # Get the first part of the path (base directory)
+                path_parts = item['Key'].replace('documents/', '').split('/')
+                if path_parts and path_parts[0]:
+                    base_dirs.add(path_parts[0])
+        
+        # Convert to list of objects with just the name field
+        files = [{'name': name} for name in sorted(base_dirs)]
+        return JSONResponse(content={'files': files})
+        
+    except ClientError as e:
+        logger.error(f"Error listing files: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error listing files: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/parse/{filename}")
+async def parse_pdf(filename: str) -> Dict[str, Any]:
+    """Parse a PDF file and extract evidence from it"""
+    logger.info(f"Received parse request for file: {filename}")
+    print(f"Parse request received successfully for file: {filename}")  # Console log
+    
+    try:
+        # Construct the S3 key
+        base_name = Path(filename).stem
+        pdf_key = f"documents/{base_name}/original_document/{filename}"
+        bucket_name = os.getenv('AWS_BUCKET_NAME')
+        
+        # Check if file exists in S3
+        try:
+            s3_client.head_object(Bucket=bucket_name, Key=pdf_key)
+        except ClientError as e:
+            if e.response['Error']['Code'] == '404':
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"File {filename} not found in S3 bucket"
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Error checking file in S3: {str(e)}"
+                )
+        
+        # If we get here, file exists
+        print(f"File {filename} found successfully in S3")  # Console log
+        
+        # Create an S3FileSystem instance for document parsing
+        fs = s3fs.S3FileSystem()
+        
+        # List files in the S3 prefix
+        s3_prefix = f"documents/{base_name}/original_document"
+        files = fs.ls(f"s3://{bucket_name}/{s3_prefix}")
+        print(f"Found files in S3: {files}")  # Console log
+        
+        try:
+            # Create a temporary local directory for downloading
+            temp_dir = "./temp_docs"
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Clean existing files in temp directory
+            for temp_file in os.listdir(temp_dir):
+                file_path = os.path.join(temp_dir, temp_file)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception as e:
+                    print(f"Failed to delete {file_path}. Reason: {str(e)}")
+            
+            # Download the file locally
+            local_path = os.path.join(temp_dir, filename)
+            fs.get(f"s3://{bucket_name}/{pdf_key}", local_path)
+            
+            # Initialize LlamaParse
+            parser = LlamaParse(
+                api_key=os.getenv("LLAMA_CLOUD_API_KEY"),
+                result_type="text",
+                verbose=True,
+                invalidate_cache=True
+            )
+            
+            # Configure file extractor with LlamaParse
+            file_extractor = {'.pdf': parser}
+            
+            # Load documents using SimpleDirectoryReader with LlamaParse extractor
+            reader = SimpleDirectoryReader(temp_dir, file_extractor=file_extractor)
+            documents = await reader.aload_data()
+            print(f"Loaded documents: {documents}")  # Console log
+            
+            # Extract text content from documents
+            document_texts = []
+            for i, doc in enumerate(documents):
+                print(f"Document {i}:")
+                print(doc.text)
+                document_texts.append(doc.text)
+            
+            # Prepare the parsed result JSON
+            parsed_result = {
+                "message": f"PDF file {filename} parsed successfully",
+                "location": f"s3://{bucket_name}/{pdf_key}",
+                "exists": True,
+                "document_count": len(documents),
+                "documents": document_texts
+            }
+            
+            # Upload parsed result to S3
+            parsed_json_key = f"documents/{base_name}/parsed_json/{filename.replace('.pdf', '.json')}"
+            try:
+                s3_client.put_object(
+                    Bucket=bucket_name,
+                    Key=parsed_json_key,
+                    Body=json.dumps(parsed_result, indent=2),
+                    ContentType='application/json'
+                )
+                print(f"Uploaded parsed result to S3: {parsed_json_key}")
+            except Exception as upload_error:
+                logger.error(f"Error uploading parsed result to S3: {str(upload_error)}")
+                # Continue even if upload fails, as we still want to return the parsed result
+            
+            # Clean up temporary files
+            os.remove(local_path)
+            os.rmdir(temp_dir)
+            
+            return parsed_result
+            
+        except Exception as parse_error:
+            logger.error(f"Error parsing documents: {str(parse_error)}")
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error parsing documents: {str(parse_error)}"
+            )
+
+    except Exception as e:
+        logger.error(f"Error in parse_pdf: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing request: {str(e)}"
+        )
+
+@router.get("/get_evidence/{filename}")
 async def get_evidence(filename: str):
     """Get extracted evidence for a specific file"""
     try:
@@ -299,9 +413,9 @@ class JobMetadata(BaseModel):
 
 class JsonData(BaseModel):
     pages: List[Page]
-    job_metadata: JobMetadata = JobMetadata()  # Make optional with default
-    job_id: str = "default_job_id"  # Make optional with default
-    file_path: str = ""  # Make optional with default
+    job_metadata: JobMetadata = JobMetadata()
+    job_id: str = "default_job_id"
+    file_path: str = ""
 
 class ProcessEvidenceRequest(BaseModel):
     file_name: str
@@ -329,17 +443,27 @@ async def extract_raw_evidence(request: ProcessEvidenceRequest):
     """Extract raw evidence from a research paper using GPT-4"""
     try:
         # Extract text from JSON first
-        research_paper = extract_text_from_json(request.json_data)
+        try:
+            research_paper = extract_text_from_json(request.json_data)
+            logger.info(f"Successfully extracted text, length: {len(research_paper)}")
+        except Exception as e:
+            logger.error("Failed to extract text from JSON", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to extract text from JSON: {str(e)}"
+            )
+        
         logger.info(f"Processing evidence extraction for file: {request.file_name}")
         
         # Create the chat completion with JSON mode
-        response = openai_client.chat.completions.create(
-            model="gpt-4-turbo-preview",
-            response_format={"type": "json_object"},
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are an expert research analyst tasked with extracting key insights from research papers.
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                response_format={"type": "json_object"},
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are an expert research analyst tasked with extracting key insights from research papers.
 Your responses must be in JSON format with the following structure:
 {
     "extractions": [
@@ -362,10 +486,10 @@ Your responses must be in JSON format with the following structure:
         ]
     }
 }"""
-                },
-                {
-                    "role": "user",
-                    "content": f"""Analyze the following research paper and extract evidence relevant to the essay topic.
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""Analyze the following research paper and extract evidence relevant to the essay topic.
 
 Research Paper:
 {research_paper}
@@ -375,60 +499,58 @@ Essay Topic:
 
 Provide a thorough analysis and extract 3-5 key pieces of evidence that support or relate to the essay topic. 
 Ensure each extraction includes the exact text from the paper and a detailed explanation of its relevance."""
-                }
-            ],
-            temperature=0.7,
-            max_tokens=4000
-        )
+                    }
+                ],
+                temperature=0.7,
+                max_tokens=4000
+            )
+            logger.info("Successfully received OpenAI response")
+            
+        except Exception as e:
+            logger.error("Failed to get OpenAI completion", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to process with OpenAI: {str(e)}"
+            )
 
-        # Log the response
-        logger.info(f"Completed evidence extraction for file: {request.file_name}")
-        
         try:
             # Parse the JSON response
             content = json.loads(response.choices[0].message.content)
+            logger.info("Successfully parsed OpenAI response JSON")
             
             # Validate against our Pydantic model
             validated_content = ExtractionResponse(**content)
+            logger.info("Successfully validated response against schema")
             
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to parse model response as JSON"
-            )
-        except ValidationError as e:
-            logger.error(f"Response validation failed: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Model response did not match expected schema"
-            )
-
-        # Store the result in S3
-        result = {
-            "timestamp": datetime.now().isoformat(),
-            "model": response.model,
-            "content": validated_content.model_dump(),
-            "usage": {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens
+            # Store the result in S3
+            result = {
+                "timestamp": datetime.now().isoformat(),
+                "model": response.model,
+                "content": validated_content.model_dump(),
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens
+                }
             }
-        }
 
-        # Generate S3 key for the result
-        result_key = f"evidence/{Path(request.file_name).stem}/extraction_result.json"
-        
-        # Upload to S3
-        s3_client.put_object(
-            Bucket=os.getenv('AWS_BUCKET_NAME'),
-            Key=result_key,
-            Body=json.dumps(result, indent=2)
-        )
+            # Generate S3 key for the result
+            result_key = f"evidence/{Path(request.file_name).stem}/extraction_result.json"
+            
+            try:
+                # Upload to S3
+                s3_client.put_object(
+                    Bucket=os.getenv('AWS_BUCKET_NAME'),
+                    Key=result_key,
+                    Body=json.dumps(result, indent=2)
+                )
+                logger.info(f"Successfully stored result in S3: {result_key}")
+            except Exception as e:
+                logger.error("Failed to store result in S3", exc_info=True)
+                # Don't fail the request if S3 storage fails
+                pass
 
-        return JSONResponse(
-            status_code=200,
-            content={
+            return {
                 "message": "Evidence extracted successfully",
                 "result": validated_content.model_dump(),
                 "metadata": {
@@ -436,8 +558,30 @@ Ensure each extraction includes the exact text from the paper and a detailed exp
                     "usage": result["usage"]
                 }
             }
-        )
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response: {e}", exc_info=True)
+            logger.error(f"Raw response content: {response.choices[0].message.content}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to parse model response as JSON: {str(e)}"
+            )
+        except ValidationError as e:
+            logger.error(f"Response validation failed: {e}", exc_info=True)
+            logger.error(f"Content being validated: {content}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Model response did not match expected schema: {str(e)}"
+            )
+        except Exception as e:
+            logger.error("Unexpected error processing response", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Unexpected error processing response: {str(e)}"
+            )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in evidence extraction: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -445,46 +589,79 @@ Ensure each extraction includes the exact text from the paper and a detailed exp
             detail=f"Error processing evidence extraction: {str(e)}"
         )
 
+@router.post("/process-evidence/{filename}")
+async def process_evidence_file(filename: str, job_id: str = None):
+    """Process evidence from a parsed PDF file"""
+    try:
+        logger.info(f"Processing evidence for file: {filename}")
+        
+        # Get the parsed JSON content
+        from .pdf_controller import get_json_content
+        try:
+            logger.info("Getting JSON content from S3...")
+            json_content = await get_json_content(filename)
+            logger.info(f"Got JSON content: {json_content}")
+            if not json_content:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to retrieve parsed JSON content"
+                )
+
+            # Process the evidence using GPT
+            logger.info("Creating ProcessEvidenceRequest...")
+            request = ProcessEvidenceRequest(
+                file_name=filename,
+                json_data=JsonData(**json_content)
+            )
+            logger.info("Created request object")
+            
+            logger.info("Processing evidence...")
+            evidence_result = await process_evidence(request)
+            logger.info("Evidence processed successfully")
+            
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "message": "Evidence processed successfully",
+                    "analysis": evidence_result,
+                    "parse_result": json_content
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error in step 2/3: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to process evidence: {str(e)}"
+            )
+
+    except Exception as e:
+        logger.error(f"Error processing evidence: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process evidence: {str(e)}"
+        )
+
 @router.post("/process-evidence")
 async def process_evidence(request: ProcessEvidenceRequest):
     """Process the parsed JSON and extract evidence using GPT-4"""
     try:
-        print("\n=== Processing Evidence ===")
-        print("Request data:", request.model_dump())
-        print("File name:", request.file_name)
-        print("JSON data:", request.json_data.model_dump())
-        print("Essay topic:", request.essay_topic)
+        logger.info("=== Processing Evidence ===")
+        logger.info(f"Processing evidence for file: {request.file_name}")
         
         # Extract and clean the text directly from the provided JSON
         try:
             result = await extract_raw_evidence(request)
-            
-            # Since result is a JSONResponse, we need to access its content
-            result_data = result.body.decode()  # Convert bytes to string
-            result_json = json.loads(result_data)  # Parse JSON string
-            
-            print("\nGPT's Response:")
-            print("=" * 40)
-            print(json.dumps(result_json["result"], indent=2))  # Print the result part which contains our extractions
-            print("=" * 40)
-            
-            return result  # Return the original JSONResponse
+            return result
             
         except Exception as inner_e:
-            print(f"Inner error: {str(inner_e)}")
-            print(f"Inner error type: {type(inner_e)}")
-            import traceback
-            print(f"Inner traceback: {traceback.format_exc()}")
+            logger.error(f"Error processing evidence: {str(inner_e)}", exc_info=True)
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to process evidence: {str(inner_e)}"
             )
             
     except Exception as e:
-        print(f"\nOuter error in process_evidence: {str(e)}")
-        print(f"Outer error type: {type(e)}")
-        import traceback
-        print(f"Outer traceback: {traceback.format_exc()}")
+        logger.error(f"Error in process_evidence: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to process evidence: {str(e)}"
@@ -556,11 +733,11 @@ def extract_text_from_json(json_data: JsonData):
 
 @router.delete("/delete/{filename}")
 async def delete_file(filename: str):
-    """Delete a file from S3 and any associated evidence"""
+    """Delete an entire document directory from S3, including all subdirectories and files"""
     try:
-        logger.info(f"Starting delete operation for file: {filename}")
+        logger.info(f"Starting deletion of document directory for file: {filename}")
         
-        # Check environment variables
+        # Validate AWS bucket configuration
         bucket_name = os.getenv('AWS_BUCKET_NAME')
         if not bucket_name:
             logger.error("AWS_BUCKET_NAME environment variable not set")
@@ -569,102 +746,106 @@ async def delete_file(filename: str):
                 detail="AWS configuration error: bucket name not set"
             )
         
-        # Construct the S3 key for the evidence folder
-        base_name = Path(filename).stem
-        evidence_key = f"evidence/{base_name}/"
-        logger.info(f"Looking for files with prefix: {evidence_key} in bucket: {bucket_name}")
+        # Construct the base directory path for the document
+        document_name = Path(filename).stem
+        document_directory = f"documents/{document_name}/"
+        logger.info(f"Preparing to delete directory: {document_directory} from bucket: {bucket_name}")
         
         try:
-            # List all objects with this prefix
-            objects_to_delete = []
-            paginator = s3_client.get_paginator('list_objects_v2')
+            # Initialize list for tracking all objects in the directory
+            objects_for_deletion = []
+            s3_paginator = s3_client.get_paginator('list_objects_v2')
             
-            logger.info("Starting S3 object listing")
-            page_count = 0
-            for page in paginator.paginate(
+            # List all objects in the document directory (including subdirectories)
+            logger.info("Scanning S3 for all files in document directory")
+            page_number = 0
+            for page in s3_paginator.paginate(
                 Bucket=bucket_name,
-                Prefix=evidence_key
+                Prefix=document_directory
             ):
-                page_count += 1
+                page_number += 1
                 if 'Contents' in page:
-                    page_objects = [{'Key': obj['Key']} for obj in page['Contents']]
-                    objects_to_delete.extend(page_objects)
-                    logger.info(f"Found {len(page_objects)} objects in page {page_count}")
+                    current_page_objects = [{'Key': obj['Key']} for obj in page['Contents']]
+                    objects_for_deletion.extend(current_page_objects)
+                    logger.info(f"Found {len(current_page_objects)} files in page {page_number}")
                 else:
-                    logger.info(f"No objects found in page {page_count}")
+                    logger.info(f"No files found in page {page_number}")
 
-            if not objects_to_delete:
-                logger.warning(f"No files found in S3 with prefix: {evidence_key}")
+            # Check if any files were found
+            if not objects_for_deletion:
+                logger.warning(f"No files found in directory: {document_directory}")
                 return JSONResponse(
                     status_code=404,
                     content={
-                        "message": f"No files found for {filename}",
+                        "message": f"No files found for document: {document_name}",
                         "details": {
                             "bucket": bucket_name,
-                            "prefix": evidence_key
+                            "directory": document_directory
                         }
                     }
                 )
 
-            logger.info(f"Attempting to delete {len(objects_to_delete)} objects")
-            logger.debug(f"Objects to delete: {objects_to_delete}")
+            logger.info(f"Initiating deletion of {len(objects_for_deletion)} files")
+            logger.debug(f"Files to be deleted: {objects_for_deletion}")
 
-            # Delete all objects with this prefix
-            delete_response = s3_client.delete_objects(
+            # Delete all files in the directory
+            deletion_response = s3_client.delete_objects(
                 Bucket=bucket_name,
-                Delete={'Objects': objects_to_delete}
+                Delete={'Objects': objects_for_deletion}
             )
             
-            # Log deletion results
-            deleted = len(delete_response.get('Deleted', []))
-            errors = delete_response.get('Errors', [])
+            # Process deletion results
+            successfully_deleted = len(deletion_response.get('Deleted', []))
+            deletion_errors = deletion_response.get('Errors', [])
             
-            if errors:
-                logger.error(f"Encountered errors while deleting: {errors}")
+            # Handle any deletion errors
+            if deletion_errors:
+                logger.error(f"Errors occurred during deletion: {deletion_errors}")
                 raise HTTPException(
                     status_code=500,
                     detail={
-                        "message": "Partial deletion failure",
-                        "errors": errors,
-                        "deleted_count": deleted
+                        "message": "Some files could not be deleted",
+                        "errors": deletion_errors,
+                        "successfully_deleted_count": successfully_deleted
                     }
                 )
             
-            logger.info(f"Successfully deleted {deleted} files from S3")
+            logger.info(f"Successfully deleted {successfully_deleted} files from document directory")
             return JSONResponse(
                 status_code=200,
                 content={
-                    "message": f"Successfully deleted {filename} and associated files",
+                    "message": f"Successfully deleted document directory for {filename}",
                     "details": {
-                        "deleted_count": deleted,
-                        "files": [obj['Key'] for obj in objects_to_delete]
+                        "files_deleted": successfully_deleted,
+                        "directory_path": document_directory,
+                        "deleted_files": [obj['Key'] for obj in objects_for_deletion]
                     }
                 }
             )
 
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            error_message = e.response['Error']['Message']
+        except ClientError as s3_error:
+            error_code = s3_error.response['Error']['Code']
+            error_message = s3_error.response['Error']['Message']
             logger.error(f"AWS S3 error: {error_code} - {error_message}")
-            logger.error(f"Full error: {str(e)}")
+            logger.error(f"Full error details: {str(s3_error)}")
             raise HTTPException(
                 status_code=500,
                 detail={
-                    "message": "Error deleting from S3",
+                    "message": "Error accessing S3",
                     "error_code": error_code,
-                    "error_message": error_message
+                    "error_details": error_message
                 }
             )
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Unexpected error deleting file: {str(e)}", exc_info=True)
+    except Exception as unexpected_error:
+        logger.error(f"Unexpected error during deletion: {str(unexpected_error)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to delete file",
-                "error": str(e),
-                "type": type(e).__name__
+                "message": "Unexpected error during file deletion",
+                "error": str(unexpected_error),
+                "error_type": type(unexpected_error).__name__
             }
         )
