@@ -63,17 +63,10 @@ async def test_endpoint():
 async def generate_essay(request: EssayGenerationRequest) -> DetailedEssayResponse:
     """
     Generate a detailed argumentative essay based on provided context and topic.
-    
-    Args:
-        request (EssayGenerationRequest): Contains context, topic, and word count for the essay
-        
-    Returns:
-        DetailedEssayResponse: Contains essay planning and detailed essay structure
-        
-    Raises:
-        HTTPException: If there's an error in essay generation or API communication
     """
     try:
+        print(f"Received request with context length: {len(request.context)}, topic: {request.topic}, word_count: {request.word_count}")
+        
         # Ensure OpenAI API key is set
         openai_api_key = os.getenv("OPENAI_API_KEY")
         if not openai_api_key:
@@ -81,9 +74,9 @@ async def generate_essay(request: EssayGenerationRequest) -> DetailedEssayRespon
 
         client = OpenAI(api_key=openai_api_key)
 
-        # Define the prompt
+        # Construct the prompt
         prompt = f"""
-You are an advanced AI tasked with writing an argumentative essay on a given topic. Your goal is to produce a well-written, engaging essay that demonstrates college-level argumentation while using language that feels natural for a high school student. 
+Please help me write a detailed essay based on the following context and topic.
 
 First, review the following information:
 
@@ -133,35 +126,38 @@ After brainstorming, outline the structure of your essay with detailed explanati
 
 Ensure that each section is clearly labeled and that the purpose of each part of the essay is explicitly stated.
 """
-
+        
         # Make the API call
         response = client.chat.completions.create(
-            model="gpt-4",  # Using standard GPT-4 model
+            model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=request.word_count * 3  # Adjust as needed
+            max_tokens=request.word_count * 3
         )
 
-        # Extract and parse the response
+        print("Received response from GPT-4")
         content = response.choices[0].message.content
+        print("Raw response content:", content[:200] + "...") # Print first 200 chars for debugging
 
         try:
             # Extract essay planning
             try:
                 essay_planning = content.split("<essay_planning>")[1].split("</essay_planning>")[0].strip()
-            except IndexError:
-                print("Failed to extract essay planning. Content:", content)
-                raise HTTPException(status_code=500, detail="Failed to extract essay planning")
+                print("Successfully extracted essay planning")
+            except IndexError as e:
+                print("Failed to extract essay planning. Content structure:", content.count("<essay_planning>"), content.count("</essay_planning>"))
+                raise HTTPException(status_code=500, detail="Failed to extract essay planning: response format incorrect")
 
             # Extract essay structure
             try:
                 structure_text = content.split("<essay_structure>")[1].split("</essay_structure>")[0].strip()
-            except IndexError:
-                print("Failed to extract essay structure. Content:", content)
-                raise HTTPException(status_code=500, detail="Failed to extract essay structure")
+                print("Successfully extracted essay structure")
+            except IndexError as e:
+                print("Failed to extract essay structure. Content structure:", content.count("<essay_structure>"), content.count("</essay_structure>"))
+                raise HTTPException(status_code=500, detail="Failed to extract essay structure: response format incorrect")
 
             # Parse introduction
             try:
@@ -172,15 +168,16 @@ Ensure that each section is clearly labeled and that the purpose of each part of
                     content=intro_content,
                     purpose=intro_purpose
                 )
-            except IndexError:
-                print("Failed to parse introduction. Structure text:", structure_text)
-                raise HTTPException(status_code=500, detail="Failed to parse introduction")
+                print("Successfully parsed introduction")
+            except IndexError as e:
+                print("Failed to parse introduction. Structure text:", structure_text[:200] + "...")
+                raise HTTPException(status_code=500, detail="Failed to parse introduction: response format incorrect")
 
             # Extract body paragraphs
             try:
                 body_parts = structure_text.split("**Body Paragraphs**")[1].split("**Conclusion**")[0].split("**Paragraph")
                 body_paragraphs = []
-                for i, part in enumerate(body_parts[1:], 1):  # Skip the first empty split
+                for i, part in enumerate(body_parts[1:], 1):
                     try:
                         content = part.split("**Content:**")[1].split("**Purpose:**")[0].strip()
                         purpose = part.split("**Purpose:**")[1].split("**Paragraph" if i < len(body_parts)-1 else "**Conclusion")[0].strip()
@@ -189,12 +186,16 @@ Ensure that each section is clearly labeled and that the purpose of each part of
                             content=content,
                             purpose=purpose
                         ))
-                    except IndexError:
-                        print(f"Failed to parse body paragraph {i}. Part:", part)
-                        continue  # Skip malformed paragraphs
-            except IndexError:
-                print("Failed to parse body paragraphs. Structure text:", structure_text)
-                raise HTTPException(status_code=500, detail="Failed to parse body paragraphs")
+                        print(f"Successfully parsed body paragraph {i}")
+                    except IndexError as e:
+                        print(f"Failed to parse body paragraph {i}. Part:", part[:200] + "...")
+                        continue
+            except IndexError as e:
+                print("Failed to parse body paragraphs. Structure text:", structure_text[:200] + "...")
+                raise HTTPException(status_code=500, detail="Failed to parse body paragraphs: response format incorrect")
+
+            if not body_paragraphs:
+                raise HTTPException(status_code=500, detail="No valid body paragraphs found in response")
 
             # Parse conclusion
             try:
@@ -205,9 +206,10 @@ Ensure that each section is clearly labeled and that the purpose of each part of
                     content=conclusion_content,
                     purpose=conclusion_purpose
                 )
-            except IndexError:
-                print("Failed to parse conclusion. Structure text:", structure_text)
-                raise HTTPException(status_code=500, detail="Failed to parse conclusion")
+                print("Successfully parsed conclusion")
+            except IndexError as e:
+                print("Failed to parse conclusion. Structure text:", structure_text[:200] + "...")
+                raise HTTPException(status_code=500, detail="Failed to parse conclusion: response format incorrect")
 
             # Create the final response
             essay_structure = EssayStructure(
@@ -224,10 +226,12 @@ Ensure that each section is clearly labeled and that the purpose of each part of
         except HTTPException:
             raise
         except Exception as e:
-            print("Unexpected error:", str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            print("Unexpected error during parsing:", str(e))
+            raise HTTPException(status_code=500, detail=f"Unexpected error during parsing: {str(e)}")
 
     except ValidationError as ve:
+        print("Validation error:", str(ve))
         raise HTTPException(status_code=422, detail=str(ve))
     except Exception as e:
+        print("Unexpected error:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
