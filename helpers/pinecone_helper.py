@@ -14,28 +14,36 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Initialize Pinecone client
-pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
+pc = None
+index = None
 
-# Get the index name from the host
-index_name = os.getenv('PINECONE_HOST')
-logger.info(f"Connecting to Pinecone index: {index_name}")
+def init_pinecone():
+    global pc, index
+    if pc is not None:
+        return
 
-try:
-    # First, check if index exists
-    if index_name not in pc.list_indexes().names():
-        logger.info(f"Creating new index: {index_name}")
-        pc.create_index(
-            name=index_name,
-            dimension=1536,  # OpenAI's text-embedding-3-small dimension
-            metric="cosine"
-        )
-    
-    # Get the index
-    index = pc.Index(index_name)
-    logger.info("Successfully connected to Pinecone index")
-except Exception as e:
-    logger.error(f"Failed to initialize Pinecone index: {str(e)}")
-    raise
+    pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
+
+    # Get the index name from the host
+    index_name = os.getenv('PINECONE_HOST')
+    logger.info(f"Connecting to Pinecone index: {index_name}")
+
+    try:
+        # First, check if index exists
+        if index_name not in pc.list_indexes().names():
+            logger.info(f"Creating new index: {index_name}")
+            pc.create_index(
+                name=index_name,
+                dimension=1536,  # OpenAI's text-embedding-3-small dimension
+                metric="cosine"
+            )
+        
+        # Get the index
+        index = pc.Index(index_name)
+        logger.info("Successfully connected to Pinecone index")
+    except Exception as e:
+        logger.error(f"Failed to initialize Pinecone index: {str(e)}")
+        raise
 
 def chunks(iterable: List[Any], batch_size: int = 100):
     """Break an iterable into chunks of size batch_size."""
@@ -87,6 +95,7 @@ async def upsert_pdf_vectors(content: List[Dict[str, Any]], pdf_name: str, batch
     Upsert vectors from PDF content to Pinecone.
     Uses batching for better performance.
     """
+    init_pinecone()
     try:
         logger.info(f"Starting vector upsert for PDF: {pdf_name}")
         
@@ -136,6 +145,7 @@ async def search_vectors(query_vector: List[float], filter: Dict[str, str] = Non
     Returns:
         List of matches with their metadata
     """
+    init_pinecone()
     try:
         # Perform the search
         results = index.query(
