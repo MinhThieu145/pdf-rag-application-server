@@ -15,6 +15,7 @@ from controllers.text_splitting_controller import router as text_split_router
 from controllers.text_embedding_controller import router as text_embed_router
 from controllers.text_processing_controller import router as text_process_router
 from controllers.essay_controller import router as essay_router
+from controllers.essay_generation_controller import router as essay_generation_router
 from controllers.evidence_extraction_controller import router as evidence_router
 from controllers.s3_controller import router as s3_router
 from controllers.pdf_controller import router as pdf_router
@@ -68,6 +69,7 @@ app.include_router(text_process_router, prefix="/api/process", tags=["text-proce
 app.include_router(essay_router, prefix="/api/essay", tags=["Essay"])
 app.include_router(evidence_router, prefix="/api/evidence", tags=["Evidence"])
 app.include_router(s3_router, prefix="/api/s3", tags=["S3"])
+app.include_router(essay_generation_router, prefix="/api/essay-generation", tags=["Essay Generation"])
 app.include_router(evidence_test_router, prefix="/api/test", tags=["Tests"])
 
 # Test routes for development and debugging
@@ -157,15 +159,4 @@ class S3TestRouter:
 s3_test_router = S3TestRouter()
 
 # Include routes
-app.include_router(course_controller.router, prefix="/api/courses", tags=["courses"])
-app.include_router(pdf_router, prefix="/api/pdf", tags=["PDF"])
-app.include_router(property_graph_controller.router, prefix="/api/graph", tags=["graph"])
-app.include_router(pdf_chatting_controller.router, prefix="/api/chat", tags=["chat"])
-app.include_router(text_split_router, prefix="/api/split", tags=["text-splitting"])
-app.include_router(text_embed_router, prefix="/api/embed", tags=["text-embedding"])
-app.include_router(text_process_router, prefix="/api/process", tags=["text-processing"])
-app.include_router(essay_router, prefix="/api/essay", tags=["Essay"])
-app.include_router(evidence_router, prefix="/api/evidence", tags=["Evidence"])
-app.include_router(s3_router, prefix="/api/s3", tags=["S3"])
-app.include_router(evidence_test_router, prefix="/api/test", tags=["Tests"])
 app.include_router(s3_test_router.router)
