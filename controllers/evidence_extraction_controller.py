@@ -516,6 +516,41 @@ Ensure each extraction includes the exact text from the paper and a detailed exp
             validated_content = ExtractionResponse(**content)
             logger.info("Successfully validated response against schema")
 
+            # Prepare the complete result with metadata
+            result = {
+                "timestamp": datetime.now().isoformat(),
+                "file_name": request.file_name,  # Add filename for reference
+                "essay_topic": request.essay_topic,  # Add topic for context
+                "analysis": validated_content.model_dump(),  # The actual analysis results
+                "metadata": {
+                    "model": response.model,
+                    "tokens_used": response.usage.total_tokens,
+                    "processing_stats": {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens
+                    }
+                }
+            }
+
+            # Save to S3
+            try:
+                # Generate S3 key for extracted evidence
+                evidence_key = f"documents/{document_name}/extracted_evidence/{request.file_name.replace('.pdf', '_evidence.json')}"
+                logger.info(f"Saving extracted evidence to S3: {evidence_key}")
+                
+                # Upload to S3
+                s3_client.put_object(
+                    Bucket=os.getenv('AWS_BUCKET_NAME'),
+                    Key=evidence_key,
+                    Body=json.dumps(result, indent=2),
+                    ContentType='application/json'
+                )
+                logger.info(f"Successfully saved evidence to S3: {evidence_key}")
+            except Exception as e:
+                logger.error(f"Failed to save evidence to S3: {str(e)}", exc_info=True)
+                # Don't fail the request if S3 storage fails, just log the error
+                pass
+
             return {
                 "message": "Evidence extracted successfully",
                 "result": validated_content.model_dump(),
