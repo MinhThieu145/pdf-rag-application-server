@@ -322,43 +322,6 @@ async def parse_pdf(filename: str) -> Dict[str, Any]:
             detail=f"Error processing request: {str(e)}"
         )
 
-@router.get("/get_evidence/{filename}")
-async def get_evidence(filename: str):
-    """Get extracted evidence for a specific file"""
-    try:
-        # TODO: Implement actual evidence retrieval
-        # This is a placeholder that returns mock data
-        evidence = {
-            "sections": [
-                {
-                    "title": "Key Evidence",
-                    "items": [
-                        {
-                            "text": f"Sample evidence 1 from {filename}",
-                            "page": 1,
-                            "confidence": 0.95
-                        },
-                        {
-                            "text": f"Sample evidence 2 from {filename}",
-                            "page": 2,
-                            "confidence": 0.88
-                        }
-                    ]
-                }
-            ]
-        }
-        
-        return JSONResponse(
-            status_code=200,
-            content=evidence
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve evidence: {str(e)}"
-        )
-
 class ExtractionRequest(BaseModel):
     research_paper: str
     essay_topic: str
@@ -419,7 +382,6 @@ class JsonData(BaseModel):
 
 class ProcessEvidenceRequest(BaseModel):
     file_name: str
-    json_data: JsonData
     essay_topic: str = "Analyze how the main character demonstrates willpower and resilience throughout their journey"
 
 class Evidence(BaseModel):
@@ -442,18 +404,50 @@ class ExtractionResponse(BaseModel):
 async def extract_raw_evidence(request: ProcessEvidenceRequest):
     """Extract raw evidence from a research paper using GPT-4"""
     try:
-        # Extract text from JSON first
+        logger.info(f"Starting evidence extraction for file: {request.file_name}")
+        logger.info(f"Essay topic: {request.essay_topic}")
+        
         try:
-            research_paper = extract_text_from_json(request.json_data)
-            logger.info(f"Successfully extracted text, length: {len(research_paper)}")
+            # Get the base name from the filename
+            document_name = Path(request.file_name).stem
+            parsed_json_key = f"documents/{document_name}/parsed_json/{request.file_name.replace('.pdf', '.json')}"
+            logger.info(f"Looking for parsed JSON at: {parsed_json_key}")
+            
+            # Read the parsed JSON file from S3
+            try:
+                logger.info(f"Attempting to read from S3 bucket: {os.getenv('AWS_BUCKET_NAME')}")
+                json_response = s3_client.get_object(
+                    Bucket=os.getenv('AWS_BUCKET_NAME'),
+                    Key=parsed_json_key
+                )
+                parsed_data = json.loads(json_response['Body'].read().decode('utf-8'))
+                logger.info("Successfully read and parsed JSON from S3")
+                
+                # Extract all text from the documents array
+                research_paper = ""
+                if 'documents' in parsed_data:
+                    research_paper = "\n\n".join(parsed_data['documents'])
+                    logger.info(f"Extracted text length: {len(research_paper)}")
+                    logger.debug(f"First 500 chars of text: {research_paper[:500]}...")
+                else:
+                    logger.warning("No 'documents' field found in parsed data")
+                    logger.debug(f"Available fields: {list(parsed_data.keys())}")
+                
+            except ClientError as e:
+                logger.error(f"Failed to read parsed JSON from S3: {str(e)}")
+                logger.error(f"S3 Error Code: {e.response['Error']['Code']}")
+                logger.error(f"S3 Error Message: {e.response['Error']['Message']}")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Could not find parsed content for file: {request.file_name}"
+                )
+                
         except Exception as e:
-            logger.error("Failed to extract text from JSON", exc_info=True)
+            logger.error("Failed to extract text from parsed JSON", exc_info=True)
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to extract text from JSON: {str(e)}"
+                detail=f"Failed to extract text from parsed JSON: {str(e)}"
             )
-        
-        logger.info(f"Processing evidence extraction for file: {request.file_name}")
         
         # Create the chat completion with JSON mode
         try:
@@ -521,41 +515,17 @@ Ensure each extraction includes the exact text from the paper and a detailed exp
             # Validate against our Pydantic model
             validated_content = ExtractionResponse(**content)
             logger.info("Successfully validated response against schema")
-            
-            # Store the result in S3
-            result = {
-                "timestamp": datetime.now().isoformat(),
-                "model": response.model,
-                "content": validated_content.model_dump(),
-                "usage": {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens
-                }
-            }
-
-            # Generate S3 key for the result
-            result_key = f"evidence/{Path(request.file_name).stem}/extraction_result.json"
-            
-            try:
-                # Upload to S3
-                s3_client.put_object(
-                    Bucket=os.getenv('AWS_BUCKET_NAME'),
-                    Key=result_key,
-                    Body=json.dumps(result, indent=2)
-                )
-                logger.info(f"Successfully stored result in S3: {result_key}")
-            except Exception as e:
-                logger.error("Failed to store result in S3", exc_info=True)
-                # Don't fail the request if S3 storage fails
-                pass
 
             return {
                 "message": "Evidence extracted successfully",
                 "result": validated_content.model_dump(),
                 "metadata": {
                     "model": response.model,
-                    "usage": result["usage"]
+                    "usage": {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens
+                    }
                 }
             }
             
@@ -611,7 +581,7 @@ async def process_evidence_file(filename: str, job_id: str = None):
             logger.info("Creating ProcessEvidenceRequest...")
             request = ProcessEvidenceRequest(
                 file_name=filename,
-                json_data=JsonData(**json_content)
+                essay_topic="Analyze how the main character demonstrates willpower and resilience throughout their journey"
             )
             logger.info("Created request object")
             
