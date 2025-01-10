@@ -1,3 +1,23 @@
+"""
+Evidence Extraction Controller
+
+This module handles the extraction and processing of evidence from PDF documents.
+It provides endpoints for uploading, parsing, and analyzing PDF files using GPT-4.
+
+Key Features:
+- PDF file upload and S3 storage
+- Document parsing and text extraction
+- Evidence analysis using GPT-4
+- File management and cleanup
+
+Environment Variables Required:
+- AWS_ACCESS_KEY_ID: AWS access key
+- AWS_SECRET_ACCESS_KEY: AWS secret key
+- AWS_REGION: AWS region
+- AWS_BUCKET_NAME: S3 bucket name
+- OPENAI_API_KEY: OpenAI API key
+"""
+
 from fastapi import APIRouter, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 import os
@@ -12,24 +32,26 @@ import json
 import re
 from datetime import datetime
 from pydantic import BaseModel, ValidationError
+from dotenv import load_dotenv
+import nest_asyncio
 import s3fs
 from llama_index.core import SimpleDirectoryReader
 from llama_parse import LlamaParse
 import shutil
-from dotenv import load_dotenv
-import nest_asyncio
+
+# Apply nest_asyncio to allow nested event loops (required for async operations)
 nest_asyncio.apply()
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
-# Set up logging
+# Set up logging configuration
 logger = logging.getLogger(__name__)
 
-# Initialize router
-router = APIRouter()
+# Initialize FastAPI router with evidence tag for API documentation
+router = APIRouter(tags=["evidence"])
 
-# Initialize AWS S3 client
+# Initialize AWS S3 client with credentials from environment
 s3_client = boto3.client(
     's3',
     aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
@@ -37,14 +59,177 @@ s3_client = boto3.client(
     region_name=os.getenv('AWS_REGION')
 )
 
-# Initialize OpenAI client
+# Initialize OpenAI client for GPT-4 integration
 openai_client = OpenAI(
     api_key=os.getenv('OPENAI_API_KEY')
 )
 
-router = APIRouter(
-    tags=["evidence"]
-)
+
+# Type Definitions
+class ImageInfo(BaseModel):
+    """Information about images extracted from documents.
+    
+    Attributes:
+        name: Image filename or identifier
+        height: Height of the image in pixels
+        width: Width of the image in pixels
+        x: X-coordinate position in the document
+        y: Y-coordinate position in the document
+        original_width: Original width before any scaling
+        original_height: Original height before any scaling
+        type: Image type/format (e.g., 'png', 'jpeg')
+    """
+    name: str
+    height: int
+    width: int
+    x: int
+    y: int
+    original_width: int
+    original_height: int
+    type: str
+
+class BBox(BaseModel):
+    """Bounding box coordinates for text elements.
+    
+    Attributes:
+        x: X-coordinate of the top-left corner
+        y: Y-coordinate of the top-left corner
+        w: Width of the bounding box
+        h: Height of the bounding box
+    """
+    x: int
+    y: int
+    w: float
+    h: float
+
+class TextItem(BaseModel):
+    """Text item extracted from the document.
+    
+    Attributes:
+        type: Type of text (e.g., 'paragraph', 'heading')
+        value: The actual text content
+        md: Markdown formatted version of the text
+        bBox: Bounding box coordinates of the text
+    """
+    type: str
+    value: str
+    md: str
+    bBox: BBox
+
+class Page(BaseModel):
+    """Represents a page from the parsed document.
+    
+    Attributes:
+        page: Page number
+        text: Raw text content of the page
+        md: Markdown formatted text content
+        images: List of images on the page
+        charts: List of charts/figures detected
+        items: List of text items with positioning
+        status: Processing status of the page
+        links: List of hyperlinks found
+        width: Page width in pixels
+        height: Page height in pixels
+        triggeredAutoMode: Whether auto-processing was triggered
+        structuredData: Additional structured data extracted
+        noStructuredContent: Flag indicating no structured content
+        noTextContent: Flag indicating no text content
+    """
+    page: int
+    text: str
+    md: str = ""
+    images: List[ImageInfo] = []
+    charts: List[Any] = []
+    items: List[TextItem] = []
+    status: str = "completed"
+    links: List[Any] = []
+    width: int = 0
+    height: int = 0
+    triggeredAutoMode: bool = False
+    structuredData: Optional[Any] = None
+    noStructuredContent: bool = False
+    noTextContent: bool = False
+
+class JobMetadata(BaseModel):
+    """Metadata about the document processing job.
+    
+    Attributes:
+        credits_used: Number of API credits consumed
+        job_credits_usage: Total credits allocated
+        job_pages: Number of pages processed
+        job_auto_mode_triggered_pages: Pages that triggered auto-mode
+        job_is_cache_hit: Whether results were from cache
+        credits_max: Maximum credits allowed
+    """
+    credits_used: float = 0
+    job_credits_usage: int = 0
+    job_pages: int = 0
+    job_auto_mode_triggered_pages: int = 0
+    job_is_cache_hit: bool = False
+    credits_max: int = 0
+
+class JsonData(BaseModel):
+    """Complete JSON data structure for parsed documents.
+    
+    Attributes:
+        pages: List of parsed pages
+        job_metadata: Processing job metadata
+        job_id: Unique identifier for the job
+        file_path: Path to the processed file
+    """
+    pages: List[Page]
+    job_metadata: JobMetadata = JobMetadata()
+    job_id: str = "default_job_id"
+    file_path: str = ""
+
+class Evidence(BaseModel):
+    """Extracted evidence from the document.
+    
+    Attributes:
+        raw_text: Original text from the document
+        meaning: Interpreted meaning/relevance
+        relevance_score: Score indicating relevance (0-1)
+    """
+    raw_text: str
+    meaning: str
+    relevance_score: float
+
+class PaperAnalysis(BaseModel):
+    """Complete analysis of a research paper.
+    
+    Attributes:
+        summary: Brief summary of the paper
+        methodology: Research methodology used
+        key_findings: List of main findings
+        relevance_to_topic: Relevance to essay topic
+        themes: List of identified themes
+    """
+    summary: str
+    methodology: str
+    key_findings: List[str]
+    relevance_to_topic: str
+    themes: List[Dict[str, str]]
+
+class ExtractionResponse(BaseModel):
+    """Response format for evidence extraction.
+    
+    Attributes:
+        extractions: List of extracted evidence
+        analysis: Complete paper analysis
+    """
+    extractions: List[Evidence]
+    analysis: PaperAnalysis
+
+class ProcessEvidenceRequest(BaseModel):
+    """Request format for evidence processing.
+    
+    Attributes:
+        file_name: Name of the file to process
+        essay_topic: Topic to analyze evidence against
+    """
+    file_name: str
+    essay_topic: str = "Analyze how the main character demonstrates willpower and resilience throughout their journey"
+
 
 def check_file_exists_in_s3(key: str) -> bool:
     """Check if a file exists in S3"""
@@ -322,83 +507,6 @@ async def parse_pdf(filename: str) -> Dict[str, Any]:
             detail=f"Error processing request: {str(e)}"
         )
 
-class ExtractionRequest(BaseModel):
-    research_paper: str
-    essay_topic: str
-    temperature: float = 0
-    max_tokens: int = 4000  # Reduced from 8192 to stay within Claude-3-Sonnet's limits
-
-class ImageInfo(BaseModel):
-    name: str
-    height: int
-    width: int
-    x: int
-    y: int
-    original_width: int
-    original_height: int
-    type: str
-
-class BBox(BaseModel):
-    x: int
-    y: int
-    w: float
-    h: float
-
-class TextItem(BaseModel):
-    type: str
-    value: str
-    md: str
-    bBox: BBox
-
-class Page(BaseModel):
-    page: int
-    text: str
-    md: str = ""  # Make optional with default
-    images: List[ImageInfo] = []  # Make optional with default empty list
-    charts: List[Any] = []  # Make optional with default empty list
-    items: List[TextItem] = []  # Make optional with default empty list
-    status: str = "completed"  # Make optional with default
-    links: List[Any] = []  # Make optional with default empty list
-    width: int = 0  # Make optional with default
-    height: int = 0  # Make optional with default
-    triggeredAutoMode: bool = False  # Make optional with default
-    structuredData: Optional[Any] = None  # Make optional
-    noStructuredContent: bool = False  # Make optional with default
-    noTextContent: bool = False  # Make optional with default
-
-class JobMetadata(BaseModel):
-    credits_used: float = 0  # Make optional with default
-    job_credits_usage: int = 0  # Make optional with default
-    job_pages: int = 0  # Make optional with default
-    job_auto_mode_triggered_pages: int = 0  # Make optional with default
-    job_is_cache_hit: bool = False  # Make optional with default
-    credits_max: int = 0  # Make optional with default
-
-class JsonData(BaseModel):
-    pages: List[Page]
-    job_metadata: JobMetadata = JobMetadata()
-    job_id: str = "default_job_id"
-    file_path: str = ""
-
-class ProcessEvidenceRequest(BaseModel):
-    file_name: str
-    essay_topic: str = "Analyze how the main character demonstrates willpower and resilience throughout their journey"
-
-class Evidence(BaseModel):
-    raw_text: str
-    meaning: str
-    relevance_score: float
-
-class PaperAnalysis(BaseModel):
-    summary: str
-    methodology: str
-    key_findings: List[str]
-    relevance_to_topic: str
-    themes: List[Dict[str, str]]
-
-class ExtractionResponse(BaseModel):
-    extractions: List[Evidence]
-    analysis: PaperAnalysis
 
 @router.post("/raw-extract")
 async def extract_raw_evidence(request: ProcessEvidenceRequest):
@@ -594,147 +702,84 @@ Ensure each extraction includes the exact text from the paper and a detailed exp
             detail=f"Error processing evidence extraction: {str(e)}"
         )
 
-@router.post("/process-evidence/{filename}")
-async def process_evidence_file(filename: str, job_id: str = None):
-    """Process evidence from a parsed PDF file"""
+@router.get("/list-evidence", response_model=List[Dict])
+async def list_evidence():
+    """
+    List and combine evidence extractions from all files in S3.
+    Returns a list of evidence items with their metadata.
+    """
     try:
-        logger.info(f"Processing evidence for file: {filename}")
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+            region_name=os.getenv('AWS_REGION')
+        )
         
-        # Get the parsed JSON content
-        from .pdf_controller import get_json_content
-        try:
-            logger.info("Getting JSON content from S3...")
-            json_content = await get_json_content(filename)
-            logger.info(f"Got JSON content: {json_content}")
-            if not json_content:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to retrieve parsed JSON content"
-                )
-
-            # Process the evidence using GPT
-            logger.info("Creating ProcessEvidenceRequest...")
-            request = ProcessEvidenceRequest(
-                file_name=filename,
-                essay_topic="Analyze how the main character demonstrates willpower and resilience throughout their journey"
-            )
-            logger.info("Created request object")
-            
-            logger.info("Processing evidence...")
-            evidence_result = await process_evidence(request)
-            logger.info("Evidence processed successfully")
-            
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "message": "Evidence processed successfully",
-                    "analysis": evidence_result,
-                    "parse_result": json_content
-                }
-            )
-        except Exception as e:
-            logger.error(f"Error in step 2/3: {str(e)}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to process evidence: {str(e)}"
-            )
-
+        # List all document directories
+        paginator = s3_client.get_paginator('list_objects_v2')
+        all_extractions = []
+        
+        # First, get all document directories
+        for page in paginator.paginate(
+            Bucket=os.getenv('AWS_BUCKET_NAME'),
+            Prefix='documents/',
+            Delimiter='/'
+        ):
+            # Get all document directories
+            for prefix in page.get('CommonPrefixes', []):
+                document_prefix = prefix.get('Prefix')
+                
+                # Now look for evidence files in each document's extracted_evidence directory
+                evidence_prefix = f"{document_prefix}extracted_evidence/"
+                
+                for evidence_page in paginator.paginate(
+                    Bucket=os.getenv('AWS_BUCKET_NAME'),
+                    Prefix=evidence_prefix
+                ):
+                    if 'Contents' in evidence_page:
+                        for obj in evidence_page['Contents']:
+                            if obj['Key'].endswith('_evidence.json'):
+                                try:
+                                    # Get the file content
+                                    response = s3_client.get_object(
+                                        Bucket=os.getenv('AWS_BUCKET_NAME'),
+                                        Key=obj['Key']
+                                    )
+                                    content = json.loads(response['Body'].read().decode('utf-8'))
+                                    
+                                    # Extract document name and file name
+                                    parts = obj['Key'].split('/')
+                                    document_name = parts[1]  # After 'documents/'
+                                    file_name = parts[-1]     # The evidence file name
+                                    
+                                    if 'analysis' in content:
+                                        # Add metadata to each extraction
+                                        for extraction in content['analysis'].get('extractions', []):
+                                            enriched_extraction = {
+                                                'document_name': document_name,
+                                                'file_name': file_name,
+                                                'essay_topic': content.get('essay_topic', ''),
+                                                'raw_text': extraction['raw_text'],
+                                                'meaning': extraction['meaning'],
+                                                'relevance_score': extraction['relevance_score']
+                                            }
+                                            all_extractions.append(enriched_extraction)
+                                    
+                                except Exception as e:
+                                    logger.error(f"Error reading file {obj['Key']}: {str(e)}")
+                                    continue
+        
+        # Sort extractions by relevance score in descending order
+        all_extractions.sort(key=lambda x: x['relevance_score'], reverse=True)
+        return all_extractions
+    
     except Exception as e:
-        logger.error(f"Error processing evidence: {str(e)}", exc_info=True)
+        logger.error(f"Failed to list evidence files: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to process evidence: {str(e)}"
+            detail=f"Failed to list evidence files: {str(e)}"
         )
-
-@router.post("/process-evidence")
-async def process_evidence(request: ProcessEvidenceRequest):
-    """Process the parsed JSON and extract evidence using GPT-4"""
-    try:
-        logger.info("=== Processing Evidence ===")
-        logger.info(f"Processing evidence for file: {request.file_name}")
-        
-        # Extract and clean the text directly from the provided JSON
-        try:
-            result = await extract_raw_evidence(request)
-            return result
-            
-        except Exception as inner_e:
-            logger.error(f"Error processing evidence: {str(inner_e)}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to process evidence: {str(inner_e)}"
-            )
-            
-    except Exception as e:
-        logger.error(f"Error in process_evidence: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to process evidence: {str(e)}"
-        )
-
-def extract_text_from_json(json_data: JsonData):
-    """Extract and clean text from the parsed JSON data"""
-    try:
-        print("\n=== Extracting Text from JSON ===")
-        print("JSON Data Type:", type(json_data))
-        
-        # Get pages data
-        pages_data = json_data.pages
-        if not pages_data:
-            raise ValueError("No pages found in JSON data")
-            
-        all_text = []
-        print(f"\nProcessing {len(pages_data)} pages...")
-        
-        # Iterate through all pages
-        for page_data in pages_data:
-            # Get the clean text from the page
-            page_text = page_data.text.strip()
-            if page_text:
-                print(f"\nPage {page_data.page} text:")
-                print("-" * 40)
-                print(page_text[:200] + "..." if len(page_text) > 200 else page_text)  # Show preview
-                print("-" * 40)
-                
-                # Clean the text before adding
-                # 1. Remove excessive whitespace
-                cleaned_page = re.sub(r'\s+', ' ', page_text)
-                # 2. Fix spacing around punctuation
-                cleaned_page = re.sub(r'\s+([.,!?])', r'\1', cleaned_page)
-                # 3. Ensure proper sentence spacing
-                cleaned_page = re.sub(r'([.!?])\s*', r'\1\n\n', cleaned_page)
-                
-                all_text.append(cleaned_page)
-        
-        # Join all text with proper spacing
-        print("\nCombining all pages...")
-        combined_text = "\n\n".join(all_text)
-        
-        # Final cleaning
-        print("\nFinal cleaning...")
-        # 1. Normalize quotes
-        cleaned_text = re.sub(r'["""]', '"', combined_text)
-        # 2. Remove any remaining multiple newlines
-        cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
-        # 3. Ensure proper spacing after newlines
-        cleaned_text = re.sub(r'\n\s+', '\n', cleaned_text)
-        
-        final_text = cleaned_text.strip()
-        
-        print("\nFinal cleaned text preview:")
-        print("=" * 40)
-        print(final_text[:500] + "..." if len(final_text) > 500 else final_text)
-        print("=" * 40)
-        print(f"Total length: {len(final_text)} characters")
-        
-        return final_text
-        
-    except Exception as e:
-        print(f"Error in extract_text_from_json: {str(e)}")
-        print("JSON data structure:", json_data)
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
-        raise
 
 @router.delete("/delete/{filename}")
 async def delete_file(filename: str):
@@ -854,3 +899,67 @@ async def delete_file(filename: str):
                 "error_type": type(unexpected_error).__name__
             }
         )
+
+def extract_text_from_json(json_data: JsonData):
+    """Extract and clean text from the parsed JSON data"""
+    try:
+        print("\n=== Extracting Text from JSON ===")
+        print("JSON Data Type:", type(json_data))
+        
+        # Get pages data
+        pages_data = json_data.pages
+        if not pages_data:
+            raise ValueError("No pages found in JSON data")
+            
+        all_text = []
+        print(f"\nProcessing {len(pages_data)} pages...")
+        
+        # Iterate through all pages
+        for page_data in pages_data:
+            # Get the clean text from the page
+            page_text = page_data.text.strip()
+            if page_text:
+                print(f"\nPage {page_data.page} text:")
+                print("-" * 40)
+                print(page_text[:200] + "..." if len(page_text) > 200 else page_text)  # Show preview
+                print("-" * 40)
+                
+                # Clean the text before adding
+                # 1. Remove excessive whitespace
+                cleaned_page = re.sub(r'\s+', ' ', page_text)
+                # 2. Fix spacing around punctuation
+                cleaned_page = re.sub(r'\s+([.,!?])', r'\1', cleaned_page)
+                # 3. Ensure proper sentence spacing
+                cleaned_page = re.sub(r'([.!?])\s*', r'\1\n\n', cleaned_page)
+                
+                all_text.append(cleaned_page)
+        
+        # Join all text with proper spacing
+        print("\nCombining all pages...")
+        combined_text = "\n\n".join(all_text)
+        
+        # Final cleaning
+        print("\nFinal cleaning...")
+        # 1. Normalize quotes
+        cleaned_text = re.sub(r'["""]', '"', combined_text)
+        # 2. Remove any remaining multiple newlines
+        cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
+        # 3. Ensure proper spacing after newlines
+        cleaned_text = re.sub(r'\n\s+', '\n', cleaned_text)
+        
+        final_text = cleaned_text.strip()
+        
+        print("\nFinal cleaned text preview:")
+        print("=" * 40)
+        print(final_text[:500] + "..." if len(final_text) > 500 else final_text)
+        print("=" * 40)
+        print(f"Total length: {len(final_text)} characters")
+        
+        return final_text
+        
+    except Exception as e:
+        print(f"Error in extract_text_from_json: {str(e)}")
+        print("JSON data structure:", json_data)
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        raise
