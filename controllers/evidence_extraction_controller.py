@@ -38,6 +38,7 @@ import s3fs
 from llama_index.core import SimpleDirectoryReader
 from llama_parse import LlamaParse
 import shutil
+from helpers.evidence_extraction_helper import process_raw_evidence
 
 # Apply nest_asyncio to allow nested event loops (required for async operations)
 nest_asyncio.apply()
@@ -200,43 +201,39 @@ class JsonData(BaseModel):
     job_id: str = "default_job_id"
     file_path: str = ""
 
-class Evidence(BaseModel):
-    """Extracted evidence from the document.
+class EvidenceReasoning(BaseModel):
+    """Detailed reasoning for a piece of evidence.
     
     Attributes:
-        raw_text: Original text from the document
-        meaning: Interpreted meaning/relevance
-        relevance_score: Score indicating relevance (0-1)
+        specific_relevance: How the evidence relates to the topic
+        application: Where this evidence can be applied
+        insights: Detailed insights from the evidence
     """
-    raw_text: str
-    meaning: str
-    relevance_score: float
+    specific_relevance: str
+    application: str
+    insights: str
 
-class PaperAnalysis(BaseModel):
-    """Complete analysis of a research paper.
+class EvidenceStrength(BaseModel):
+    """Assessment of evidence strength.
     
     Attributes:
-        summary: Brief summary of the paper
-        methodology: Research methodology used
-        key_findings: List of main findings
-        relevance_to_topic: Relevance to essay topic
-        themes: List of identified themes
+        score: Strength score (high, moderate, low)
+        justification: Justification for the score
     """
-    summary: str
-    methodology: str
-    key_findings: List[str]
-    relevance_to_topic: str
-    themes: List[Dict[str, str]]
+    score: str
+    justification: str
+
+class Evidence(BaseModel):
+    """A piece of evidence with detailed analysis."""
+    exact_text: str
+    category: str
+    simplified_reasoning: str
+    strength_of_evidence: EvidenceStrength
 
 class ExtractionResponse(BaseModel):
-    """Response format for evidence extraction.
-    
-    Attributes:
-        extractions: List of extracted evidence
-        analysis: Complete paper analysis
-    """
-    extractions: List[Evidence]
-    analysis: PaperAnalysis
+    """Response format for evidence analysis."""
+    refined_topic: str
+    verified_evidence: List[Evidence]
 
 class ProcessEvidenceRequest(BaseModel):
     """Request format for evidence processing.
@@ -246,8 +243,7 @@ class ProcessEvidenceRequest(BaseModel):
         essay_topic: Topic to analyze evidence against
     """
     file_name: str
-    essay_topic: str = "Analyze how the main character demonstrates willpower and resilience throughout their journey"
-
+    essay_topic: str = "Why gaming is great and should be encouraged?"
 
 def check_file_exists_in_s3(key: str) -> bool:
     """Check if a file exists in S3"""
@@ -365,31 +361,36 @@ async def upload_file_for_evidence(file: UploadFile = File(...)):
 
 @router.get("/list")
 async def list_files_endpoint():
-    """List all files endpoint"""
+    """List all files endpoint with PDF details from original_document folders"""
     try:
-        # Get list of files from S3 bucket
-        response = s3_client.list_objects_v2(
+        # First, get all base directories
+        base_response = s3_client.list_objects_v2(
             Bucket=os.getenv('AWS_BUCKET_NAME'),
-            Prefix='documents/'
+            Prefix='documents/',
+            Delimiter='/'
         )
         
-        # Track unique base directories
-        base_dirs = set()
+        files = []
+        # Process each base directory
+        if 'CommonPrefixes' in base_response:
+            for prefix in base_response['CommonPrefixes']:
+                base_dir = prefix['Prefix']
+                # Look for PDF in original_document subfolder
+                pdf_response = s3_client.list_objects_v2(
+                    Bucket=os.getenv('AWS_BUCKET_NAME'),
+                    Prefix=f"{base_dir}original_document/"
+                )
+                
+                if 'Contents' in pdf_response:
+                    for item in pdf_response['Contents']:
+                        if item['Key'].lower().endswith('.pdf'):
+                            files.append({
+                                'folder': base_dir.replace('documents/', '').rstrip('/'),
+                                'pdf_name': os.path.basename(item['Key']),
+                                'size': item['Size'],
+                                'last_modified': item['LastModified'].isoformat()
+                            })
         
-        # Extract file names from response
-        if 'Contents' in response:
-            for item in response['Contents']:
-                # Skip the directory itself
-                if item['Key'] == 'documents/':
-                    continue
-                    
-                # Get the first part of the path (base directory)
-                path_parts = item['Key'].replace('documents/', '').split('/')
-                if path_parts and path_parts[0]:
-                    base_dirs.add(path_parts[0])
-        
-        # Convert to list of objects with just the name field
-        files = [{'name': name} for name in sorted(base_dirs)]
         return JSONResponse(content={'files': files})
         
     except ClientError as e:
@@ -528,196 +529,8 @@ async def parse_pdf(filename: str) -> Dict[str, Any]:
 @router.post("/raw-extract")
 async def extract_raw_evidence(request: ProcessEvidenceRequest):
     """Extract raw evidence from a research paper using GPT-4"""
-    try:
-        logger.info(f"Starting evidence extraction for file: {request.file_name}")
-        logger.info(f"Essay topic: {request.essay_topic}")
-        
-        try:
-            # Get the base name from the filename
-            document_name = Path(request.file_name).stem
-            parsed_json_key = f"documents/{document_name}/parsed_json/{request.file_name.replace('.pdf', '.json')}"
-            logger.info(f"Looking for parsed JSON at: {parsed_json_key}")
-            
-            # Read the parsed JSON file from S3
-            try:
-                logger.info(f"Attempting to read from S3 bucket: {os.getenv('AWS_BUCKET_NAME')}")
-                json_response = s3_client.get_object(
-                    Bucket=os.getenv('AWS_BUCKET_NAME'),
-                    Key=parsed_json_key
-                )
-                parsed_data = json.loads(json_response['Body'].read().decode('utf-8'))
-                logger.info("Successfully read and parsed JSON from S3")
-                
-                # Extract all text from the documents array
-                research_paper = ""
-                if 'documents' in parsed_data:
-                    research_paper = "\n\n".join(parsed_data['documents'])
-                    logger.info(f"Extracted text length: {len(research_paper)}")
-                    logger.info(f"First 500 chars of text: {research_paper[:500]}...")
-                else:
-                    logger.info("No 'documents' field found in parsed data")
-                    logger.info(f"Available fields: {list(parsed_data.keys())}")
-                
-            except ClientError as e:
-                logger.info(f"Failed to read parsed JSON from S3: {str(e)}")
-                logger.info(f"S3 Error Code: {e.response['Error']['Code']}")
-                logger.info(f"S3 Error Message: {e.response['Error']['Message']}")
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Could not find parsed content for file: {request.file_name}"
-                )
-                
-        except Exception as e:
-            logger.info("Failed to extract text from parsed JSON", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to extract text from parsed JSON: {str(e)}"
-            )
-        
-        # Create the chat completion with JSON mode
-        try:
-            response = openai_client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                response_format={"type": "json_object"},
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an expert research analyst tasked with extracting key insights from research papers.
-Your responses must be in JSON format with the following structure:
-{
-    "extractions": [
-        {
-            "raw_text": "exact quote from paper",
-            "meaning": "explanation of relevance",
-            "relevance_score": float between 0 and 1
-        }
-    ],
-    "analysis": {
-        "summary": "brief summary",
-        "methodology": "research methodology",
-        "key_findings": ["finding1", "finding2", ...],
-        "relevance_to_topic": "explanation of relevance",
-        "themes": [
-            {
-                "theme": "theme name",
-                "relevance": "theme relevance"
-            }
-        ]
-    }
-}"""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"""Analyze the following research paper and extract evidence relevant to the essay topic.
+    return await process_raw_evidence(request.file_name, request.essay_topic, ExtractionResponse)
 
-Research Paper:
-{research_paper}
-
-Essay Topic:
-{request.essay_topic}
-
-Provide a thorough analysis and extract 3-5 key pieces of evidence that support or relate to the essay topic. 
-Ensure each extraction includes the exact text from the paper and a detailed explanation of its relevance."""
-                    }
-                ],
-                temperature=0.7,
-                max_tokens=4000
-            )
-            logger.info("Successfully received OpenAI response")
-            
-        except Exception as e:
-            logger.info("Failed to get OpenAI completion", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to process with OpenAI: {str(e)}"
-            )
-
-        try:
-            # Parse the JSON response
-            content = json.loads(response.choices[0].message.content)
-            logger.info("Successfully parsed OpenAI response JSON")
-            
-            # Validate against our Pydantic model
-            validated_content = ExtractionResponse(**content)
-            logger.info("Successfully validated response against schema")
-
-            # Prepare the complete result with metadata
-            result = {
-                "timestamp": datetime.now().isoformat(),
-                "file_name": request.file_name,  # Add filename for reference
-                "essay_topic": request.essay_topic,  # Add topic for context
-                "analysis": validated_content.model_dump(),  # The actual analysis results
-                "metadata": {
-                    "model": response.model,
-                    "tokens_used": response.usage.total_tokens,
-                    "processing_stats": {
-                        "prompt_tokens": response.usage.prompt_tokens,
-                        "completion_tokens": response.usage.completion_tokens
-                    }
-                }
-            }
-
-            # Save to S3
-            try:
-                # Generate S3 key for extracted evidence
-                evidence_key = f"documents/{document_name}/extracted_evidence/{request.file_name.replace('.pdf', '_evidence.json')}"
-                logger.info(f"Saving extracted evidence to S3: {evidence_key}")
-                
-                # Upload to S3
-                s3_client.put_object(
-                    Bucket=os.getenv('AWS_BUCKET_NAME'),
-                    Key=evidence_key,
-                    Body=json.dumps(result, indent=2),
-                    ContentType='application/json'
-                )
-                logger.info(f"Successfully saved evidence to S3: {evidence_key}")
-            except Exception as e:
-                logger.info(f"Failed to save evidence to S3: {str(e)}", exc_info=True)
-                # Don't fail the request if S3 storage fails, just log the error
-                pass
-
-            return {
-                "message": "Evidence extracted successfully",
-                "result": validated_content.model_dump(),
-                "metadata": {
-                    "model": response.model,
-                    "usage": {
-                        "prompt_tokens": response.usage.prompt_tokens,
-                        "completion_tokens": response.usage.completion_tokens,
-                        "total_tokens": response.usage.total_tokens
-                    }
-                }
-            }
-            
-        except json.JSONDecodeError as e:
-            logger.info(f"Failed to parse JSON response: {e}", exc_info=True)
-            logger.info(f"Raw response content: {response.choices[0].message.content}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to parse model response as JSON: {str(e)}"
-            )
-        except ValidationError as e:
-            logger.info(f"Response validation failed: {e}", exc_info=True)
-            logger.info(f"Content being validated: {content}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Model response did not match expected schema: {str(e)}"
-            )
-        except Exception as e:
-            logger.info("Unexpected error processing response", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Unexpected error processing response: {str(e)}"
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.info(f"Error in evidence extraction: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing evidence extraction: {str(e)}"
-        )
 
 @router.get("/list-evidence", response_model=List[Dict])
 async def list_evidence():
@@ -787,15 +600,19 @@ async def list_evidence():
                                         
                                         if 'analysis' in content:
                                             # Add metadata to each extraction
-                                            for extraction in content['analysis'].get('extractions', []):
+                                            for extraction in content['analysis'].get('verified_evidence', []):
                                                 enriched_extraction = {
                                                     'document_name': doc_name,
                                                     'file_name': file_name,
                                                     'essay_topic': content.get('essay_topic', ''),
-                                                    'raw_text': extraction['raw_text'],
-                                                    'meaning': extraction['meaning'],
-                                                    'relevance_score': extraction['relevance_score']
+                                                    'refined_topic': content['analysis'].get('refined_topic', ''),
+                                                    'raw_text': extraction['exact_text'],
+                                                    'category': extraction['category'],
+                                                    'reasoning': extraction['simplified_reasoning'],
+                                                    'strength': extraction['strength_of_evidence']['score'],
+                                                    'strength_justification': extraction['strength_of_evidence']['justification']
                                                 }
+                                                logger.info(f"Enriched extraction: {enriched_extraction}")
                                                 all_extractions.append(enriched_extraction)
                                         
                                     except Exception as e:
@@ -809,8 +626,9 @@ async def list_evidence():
                 detail=f"Failed to list evidence files: {str(e)}"
             )
         
-        # Sort extractions by relevance score in descending order
-        all_extractions.sort(key=lambda x: x['relevance_score'], reverse=True)
+        # Sort extractions by strength in descending order
+        strength_order = {'High': 3, 'Moderate': 2, 'Low': 1}
+        all_extractions.sort(key=lambda x: strength_order.get(x['strength'], 0), reverse=True)
         return all_extractions
     
     except Exception as e:

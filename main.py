@@ -72,6 +72,11 @@ app.include_router(s3_router, prefix="/api/s3", tags=["S3"])
 app.include_router(essay_generation_router, prefix="/api/essay-generation", tags=["Essay Generation"])
 app.include_router(evidence_test_router, prefix="/api/test", tags=["Tests"])
 
+@app.get("/test", tags=["Test"])
+async def test_endpoint():
+    """Simple test endpoint to verify API is working"""
+    return {"message": "API is working!", "status": "success"}
+
 # Test routes for development and debugging
 class S3TestRouter:
     def __init__(self):
