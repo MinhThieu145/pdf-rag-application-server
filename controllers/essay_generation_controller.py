@@ -65,6 +65,14 @@ async def generate_essay(request: EssayGenerationRequest) -> DetailedEssayRespon
     Generate a detailed argumentative essay based on provided context and topic.
     """
     try:
+        print("\n=== Essay Generation Request ===")
+        print(f"Topic: {request.topic}")
+        print(f"Word Count: {request.word_count}")
+        print("\nContext:")
+        print("----------------------------------------")
+        print(request.context)
+        print("----------------------------------------\n")
+        
         print(f"Received request with context length: {len(request.context)}, topic: {request.topic}, word_count: {request.word_count}")
         
         # Ensure OpenAI API key is set
@@ -74,164 +82,103 @@ async def generate_essay(request: EssayGenerationRequest) -> DetailedEssayRespon
 
         client = OpenAI(api_key=openai_api_key)
 
-        # Construct the prompt
-        prompt = f"""
-Please help me write a detailed essay based on the following context and topic.
-
-First, review the following information:
-
-Context to use as evidence (do not use any information outside of this):
-<context>
-{request.context}
-</context>
-
-Topic for your essay:
-<topic>
-{request.topic}
-</topic>
-
-Required word count:
-<word_count>
-{request.word_count}
-</word_count>
-
-Before writing the essay, wrap your brainstorming process inside <essay_planning> tags. In your essay planning:
-1. Analyze the topic and context
-2. Develop a clear, strong thesis statement
-3. Outline the main arguments and supporting points
-4. Identify key evidence from the context that supports each main point
-5. Plan the structure of your essay, including how to transition between ideas
-6. Consider potential counterarguments and how to address them
-7. Brainstorm ways to make the essay relatable to high school students
-8. List any relevant examples or anecdotes that could engage the target audience
-
-After brainstorming, outline the structure of your essay with detailed explanations. Wrap this outline inside <essay_structure> tags. In your essay structure:
-1. **Introduction**
-   - **Content:** [Your introduction text]
-   - **Purpose:** [Explanation of what the introduction does]
-2. **Body Paragraphs**
-   - **Paragraph 1**
-     - **Content:** [Text of paragraph 1]
-     - **Purpose:** [Explanation of paragraph 1's role]
-   - **Paragraph 2**
-     - **Content:** [Text of paragraph 2]
-     - **Purpose:** [Explanation of paragraph 2's role]
-   - **Paragraph 3**
-     - **Content:** [Text of paragraph 3]
-     - **Purpose:** [Explanation of paragraph 3's role]
-   <!-- Add more paragraphs as needed -->
-3. **Conclusion**
-   - **Content:** [Your conclusion text]
-   - **Purpose:** [Explanation of what the conclusion does]
-
-Ensure that each section is clearly labeled and that the purpose of each part of the essay is explicitly stated.
-"""
-        
         # Make the API call
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4",  # Note: Using gpt-4 as gpt-4o-2024-08-06 isn't available yet
             messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "developer", 
+                    "content": '''
+
+You are an expert at analyzing topics and evidence to create detailed, compelling argumentative essay plans. Your task is to think critically about the given topic and evidence, brainstorming the most effective essay structure, arguments, and use of evidence, while considering a specified word count. Ensure that the essay plan is persuasive, balanced, and well-structured.
+
+Input Format
+Context:
+
+Evidence: A list of key pieces of information, facts, or findings relevant to the topic.
+Reasoning: A detailed explanation of how the evidence supports or informs the topic. Include any limitations or alternative interpretations of the evidence.
+Topic: The refined essay topic or question being addressed.
+Word Count: The total number of words allowed for the essay. This will guide paragraph planning and detail depth.
+
+Instructions
+Analyze the Evidence:
+
+Carefully evaluate each piece of evidence.
+Identify multiple ways the evidence can support the argument (e.g., as a primary argument, a counterargument, or background context).
+Explore alternative interpretations or limitations of the evidence to create a balanced discussion.
+Plan Paragraph Structure and Content:
+
+Consider the word count to estimate the number of paragraphs needed.
+Assign approximate word counts to the introduction, body paragraphs, and conclusion.
+Decide what each paragraph will focus on, ensuring each has a distinct purpose and logical flow.
+Develop a Persuasive Argument:
+
+Identify a clear thesis statement that aligns with the evidence and reasoning.
+Use the evidence to construct logical, emotionally engaging, and authoritative arguments.
+Integrate counterarguments seamlessly, addressing them in ways that strengthen the overall essay.
+Outline the Structure:
+
+Divide the essay into sections: introduction, body paragraphs, and conclusion.
+For each paragraph, describe:
+Its purpose (e.g., introducing the argument, presenting evidence, rebutting a counterargument).
+The main idea, evidence, and reasoning to be used.
+Ensure the outline reflects a persuasive, balanced essay that flows logically from start to finish.
+Output Format
+Brainstorming:
+
+Main Ideas: List several potential arguments or themes for the essay.
+Connections: Describe how the evidence can be tied to these main ideas.
+Counterarguments: Identify potential opposing views and propose rebuttals to strengthen the argument.
+Essay Length Plan:
+
+Total Word Count: Specify the word count provided.
+Estimated Paragraphs: Determine the number of paragraphs based on the word count and complexity of the topic.
+Word Count Distribution:
+Introduction: Approximate word count for the introduction.
+Body Paragraphs: Word count per paragraph, with reasoning for distribution.
+Conclusion: Approximate word count for the conclusion.
+Proposed Essay Outline:
+
+Introduction:
+Purpose: Ideas for the hook, context, and thesis statement.
+Key Focus: What the introduction will achieve within the word limit.
+Body Paragraphs:
+Paragraph 1: Main idea, evidence, reasoning, and purpose.
+Paragraph 2: Main idea, evidence, reasoning, and purpose.
+Paragraph 3 (if applicable): Main idea, evidence, reasoning, and purpose.
+Conclusion:
+Purpose: How the conclusion will tie together the essay’s arguments.
+Key Focus: What message the conclusion will leave with the reader.
+Guidelines for Originality
+Avoid generic or overly simplified responses. Focus on tailoring the essay plan to the nuances of the evidence and topic.
+Incorporate creative approaches where appropriate, such as unique hooks, engaging examples, or surprising connections.
+
+
+'''
+                },
+                {
+                    "role": "user", 
+                    "content": f"Evidence with Reasoning:\n{request.context}\n\nTopic: {request.topic}\n\nWord Count: {request.word_count}"
+                }
             ],
-            temperature=0.7,
+            temperature=0.5,
             max_tokens=request.word_count * 3
         )
 
         print("Received response from GPT-4")
         content = response.choices[0].message.content
-        print("Raw response content:", content[:200] + "...") # Print first 200 chars for debugging
+        print("Response content:", content)
 
-        try:
-            # Extract essay planning
-            try:
-                essay_planning = content.split("<essay_planning>")[1].split("</essay_planning>")[0].strip()
-                print("Successfully extracted essay planning")
-            except IndexError as e:
-                print("Failed to extract essay planning. Content structure:", content.count("<essay_planning>"), content.count("</essay_planning>"))
-                raise HTTPException(status_code=500, detail="Failed to extract essay planning: response format incorrect")
-
-            # Extract essay structure
-            try:
-                structure_text = content.split("<essay_structure>")[1].split("</essay_structure>")[0].strip()
-                print("Successfully extracted essay structure")
-            except IndexError as e:
-                print("Failed to extract essay structure. Content structure:", content.count("<essay_structure>"), content.count("</essay_structure>"))
-                raise HTTPException(status_code=500, detail="Failed to extract essay structure: response format incorrect")
-
-            # Parse introduction
-            try:
-                intro_text = structure_text.split("**Introduction**")[1].split("**Body Paragraphs**")[0].strip()
-                intro_content = intro_text.split("**Content:**")[1].split("**Purpose:**")[0].strip()
-                intro_purpose = intro_text.split("**Purpose:**")[1].strip()
-                introduction = Introduction(
-                    content=intro_content,
-                    purpose=intro_purpose
-                )
-                print("Successfully parsed introduction")
-            except IndexError as e:
-                print("Failed to parse introduction. Structure text:", structure_text[:200] + "...")
-                raise HTTPException(status_code=500, detail="Failed to parse introduction: response format incorrect")
-
-            # Extract body paragraphs
-            try:
-                body_parts = structure_text.split("**Body Paragraphs**")[1].split("**Conclusion**")[0].split("**Paragraph")
-                body_paragraphs = []
-                for i, part in enumerate(body_parts[1:], 1):
-                    try:
-                        content = part.split("**Content:**")[1].split("**Purpose:**")[0].strip()
-                        purpose = part.split("**Purpose:**")[1].split("**Paragraph" if i < len(body_parts)-1 else "**Conclusion")[0].strip()
-                        body_paragraphs.append(Paragraph(
-                            paragraph_number=i,
-                            content=content,
-                            purpose=purpose
-                        ))
-                        print(f"Successfully parsed body paragraph {i}")
-                    except IndexError as e:
-                        print(f"Failed to parse body paragraph {i}. Part:", part[:200] + "...")
-                        continue
-            except IndexError as e:
-                print("Failed to parse body paragraphs. Structure text:", structure_text[:200] + "...")
-                raise HTTPException(status_code=500, detail="Failed to parse body paragraphs: response format incorrect")
-
-            if not body_paragraphs:
-                raise HTTPException(status_code=500, detail="No valid body paragraphs found in response")
-
-            # Parse conclusion
-            try:
-                conclusion_text = structure_text.split("**Conclusion**")[1].strip()
-                conclusion_content = conclusion_text.split("**Content:**")[1].split("**Purpose:**")[0].strip()
-                conclusion_purpose = conclusion_text.split("**Purpose:**")[1].strip()
-                conclusion = Conclusion(
-                    content=conclusion_content,
-                    purpose=conclusion_purpose
-                )
-                print("Successfully parsed conclusion")
-            except IndexError as e:
-                print("Failed to parse conclusion. Structure text:", structure_text[:200] + "...")
-                raise HTTPException(status_code=500, detail="Failed to parse conclusion: response format incorrect")
-
-            # Create the final response
-            essay_structure = EssayStructure(
-                introduction=introduction,
-                body_paragraphs=body_paragraphs,
-                conclusion=conclusion
+        # Return the content directly
+        return DetailedEssayResponse(
+            essay_planning=content,
+            essay_structure=EssayStructure(
+                introduction=Introduction(content="", purpose=""),
+                body_paragraphs=[],
+                conclusion=Conclusion(content="", purpose="")
             )
+        )
 
-            return DetailedEssayResponse(
-                essay_planning=essay_planning,
-                essay_structure=essay_structure
-            )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            print("Unexpected error during parsing:", str(e))
-            raise HTTPException(status_code=500, detail=f"Unexpected error during parsing: {str(e)}")
-
-    except ValidationError as ve:
-        print("Validation error:", str(ve))
-        raise HTTPException(status_code=422, detail=str(ve))
     except Exception as e:
-        print("Unexpected error:", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Error in essay generation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate essay: {str(e)}")
