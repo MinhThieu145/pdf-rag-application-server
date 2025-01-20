@@ -1,29 +1,25 @@
 # Core Framework
 fastapi==0.115.6
-uvicorn==0.34.0
+uvicorn==0.24.0
 python-multipart==0.0.6
 pydantic==2.9.2
 
 # AWS
-boto3==1.29.6
+boto3==1.35.96
+s3fs==0.4.2
+botocore==1.35.96
 
 # PDF Processing & Text Analysis
 unstructured[pdf]
-nltk
+llama-index-core>=0.10.0
+llama-parse==0.5.18
 
-# Vector Database & AI
-pinecone-client==5.0.1
+# AI
 openai==1.58.1
-
-# Graph Processing
-networkx==3.4.2
-
-# Data Processing
-numpy==2.0.0
-pandas==2.2.3
 
 # Utilities
 python-dotenv==1.0.0
 nest-asyncio==1.6.0
 httpx==0.27.0
 PyYAML==6.0.1
+logging==0.4.9.6
