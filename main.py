@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request, APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from controllers.essay_generation_controller import router as essay_generation_router
+from controllers.chat_controller import router as chat_router
 from controllers.evidence_extraction_controller import router as evidence_router
 from controllers.s3_controller import router as s3_router
 import boto3
@@ -49,3 +50,4 @@ app.state.max_request_size = 100 * 1024 * 1024  # 100MB max request size
 app.include_router(evidence_router, prefix="/api/evidence", tags=["Evidence"])
 app.include_router(s3_router, prefix="/api/s3", tags=["S3"])
 app.include_router(essay_generation_router, prefix="/api/essay-generation", tags=["Essay Generation"])
+app.include_router(chat_router, prefix="/api/chat", tags=["Chat"])
