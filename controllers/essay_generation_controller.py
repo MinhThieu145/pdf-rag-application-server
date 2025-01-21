@@ -84,7 +84,7 @@ async def generate_essay(request: EssayGenerationRequest) -> DetailedEssayRespon
 
         # Make the API call
         response = client.chat.completions.create(
-            model="gpt-4",  # Note: Using gpt-4 as gpt-4o-2024-08-06 isn't available yet
+            model="gpt-4o",  # Note: Using gpt-4 as gpt-4o-2024-08-06 isn't available yet
             messages=[
                 {
                     "role": "developer", 
